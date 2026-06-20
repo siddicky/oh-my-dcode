@@ -60,6 +60,9 @@
   "peerDependenciesMeta": {
     "deepagents": {
       "optional": true
+    },
+    "langchain": {
+      "optional": true
     }
   },
   "devDependencies": {

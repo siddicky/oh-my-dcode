@@ -4,7 +4,12 @@ import {
   buildDeepAgentConfig,
   resolveSubagents,
   resolveBackendDescriptor,
+  resolveMiddlewareDescriptors,
+  applyInvokeDefaults,
   bundledSkillsDir,
+  DEFAULT_MODEL_RETRIES,
+  DEFAULT_TOOL_RETRIES,
+  DEFAULT_RECURSION_LIMIT,
 } from "../src/agent.ts";
 import { ROSTER } from "../src/agents.ts";
 import { resolveModelMap } from "../src/routing.ts";
@@ -104,6 +109,54 @@ test("buildDeepAgentConfig is hermetic: ambient OMD_MODEL_* never clobbers expli
     if (prev === undefined) delete process.env.OMD_MODEL_OPUS;
     else process.env.OMD_MODEL_OPUS = prev;
   }
+});
+
+test("default config installs model + tool retry middleware and a recursion limit", () => {
+  const config = buildDeepAgentConfig();
+  assert.deepEqual(config.middleware, [
+    { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
+    { kind: "tool-retry", maxRetries: DEFAULT_TOOL_RETRIES },
+  ]);
+  assert.equal(config.recursionLimit, DEFAULT_RECURSION_LIMIT);
+  // A delegating supervisor needs headroom above LangGraph's default of 25.
+  assert.ok(config.recursionLimit > 25);
+});
+
+test("retry counts are configurable and 0/null disables that layer", () => {
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 5 }), [
+    { kind: "model-retry", maxRetries: 5 },
+    { kind: "tool-retry", maxRetries: DEFAULT_TOOL_RETRIES },
+  ]);
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 0 }), [
+    { kind: "tool-retry", maxRetries: DEFAULT_TOOL_RETRIES },
+  ]);
+  assert.deepEqual(resolveMiddlewareDescriptors({ toolRetries: null }), [
+    { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
+  ]);
+  assert.deepEqual(
+    resolveMiddlewareDescriptors({ modelRetries: 0, toolRetries: 0 }),
+    [],
+  );
+});
+
+test("recursionLimit option flows into the config", () => {
+  assert.equal(buildDeepAgentConfig({ recursionLimit: 250 }).recursionLimit, 250);
+});
+
+test("applyInvokeDefaults supplies recursionLimit only when caller omits it", () => {
+  assert.deepEqual(applyInvokeDefaults(undefined, 100), { recursionLimit: 100 });
+  // Caller's explicit limit wins; configurable/context are preserved.
+  assert.deepEqual(
+    applyInvokeDefaults(
+      { recursionLimit: 10, configurable: { thread_id: "t1" } },
+      100,
+    ),
+    { recursionLimit: 10, configurable: { thread_id: "t1" } },
+  );
+  assert.deepEqual(
+    applyInvokeDefaults({ configurable: { thread_id: "t2" } }, 100),
+    { recursionLimit: 100, configurable: { thread_id: "t2" } },
+  );
 });
 
 test("resolveSubagents maps tiers to models", () => {

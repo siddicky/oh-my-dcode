@@ -129,6 +129,49 @@ export interface DeepAgentConfig {
    * pass it straight to `createDeepAgent` via the SDK rather than this option.
    */
   interruptOn: Record<string, boolean>;
+  /**
+   * Fault-tolerance middleware to install on the harness, as serializable
+   * descriptors. The adapter turns each into a real LangChain middleware
+   * instance (`modelRetryMiddleware` / `toolRetryMiddleware`) and passes the
+   * array to `createDeepAgent`'s `middleware` option. Kept as descriptors here
+   * so the builder stays dependency-free and unit-testable.
+   */
+  middleware: MiddlewareDescriptor[];
+  /**
+   * Maximum number of steps the agent loop may take before LangGraph aborts
+   * with a recursion error. Applied as the default `recursionLimit` in the
+   * invoke config (LangGraph's own default of 25 is low for a supervisor that
+   * delegates into nested sub-agent loops).
+   */
+  recursionLimit: number;
+}
+
+/**
+ * A serializable description of a fault-tolerance middleware to install. The
+ * adapter resolves each to a concrete LangChain middleware at the runtime
+ * boundary, mirroring how {@link BackendDescriptor} is resolved to a backend.
+ *
+ * - `model-retry` → `modelRetryMiddleware` (retries failed model calls)
+ * - `tool-retry`  → `toolRetryMiddleware` (retries failed tool calls)
+ */
+export interface MiddlewareDescriptor {
+  kind: "model-retry" | "tool-retry";
+  /** Retry attempts after the initial call (the SDK's `maxRetries` option). */
+  maxRetries: number;
+}
+
+/**
+ * The runtime invoke config accepted by a live agent, mirroring LangChain /
+ * LangGraph's shape. Note `thread_id` is snake_case — that is the key the
+ * checkpointer reads; a camelCase `threadId` is silently ignored.
+ */
+export interface InvokeConfig {
+  /** Per-thread scoping for checkpointed conversation history. */
+  configurable?: { thread_id?: string } & Record<string, unknown>;
+  /** Max agent-loop steps before LangGraph throws (LangGraph default: 25). */
+  recursionLimit?: number;
+  /** Per-run context data made available to tools and middleware. */
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -179,6 +222,24 @@ export interface OhMyDcodeOptions {
   extraAgents?: AgentSpec[];
   /** Tool names to gate behind human approval. Defaults to destructive ops. */
   interruptOn?: Record<string, boolean>;
+  /**
+   * Retry attempts for failed model calls (rate limits, transient errors),
+   * installed via `modelRetryMiddleware`. Defaults to `2`. Set to `0` or `null`
+   * to disable model retries.
+   */
+  modelRetries?: number | null;
+  /**
+   * Retry attempts for failed tool calls, installed via `toolRetryMiddleware`.
+   * Defaults to `2`. Set to `0` or `null` to disable tool retries.
+   */
+  toolRetries?: number | null;
+  /**
+   * Maximum agent-loop steps before LangGraph aborts the run. Defaults to a
+   * value tuned for a delegating supervisor (LangGraph's own default of 25 is
+   * easily exhausted by nested sub-agent loops). Applied as the invoke-time
+   * `recursionLimit`; a per-call `recursionLimit` still wins.
+   */
+  recursionLimit?: number;
   /** Additional skill directories to load alongside the bundled OMC skills. */
   skillDirs?: string[];
   /** Additional memory (AGENTS.md) paths to load. */

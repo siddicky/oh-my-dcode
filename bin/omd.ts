@@ -37,11 +37,15 @@ Options:
   --adversarial-model <m>   Model for adversarial agents (critic/reviewers);
                             'none' disables (default: openai:gpt-5.5)
   --workdir <dir>           Working directory the agent operates on
+  --recursion-limit <n>     Max agent-loop steps before aborting (default: 100)
+  --model-retries <n>       Retries for failed model calls; 0 disables (default: 2)
+  --tool-retries <n>        Retries for failed tool calls; 0 disables (default: 2)
   --force                   For init: overwrite existing files
 
 Environment:
   OMD_ROUTING, OMD_BACKEND, OMD_WORKDIR, OMD_ADVERSARIAL_MODEL
   OMD_MODEL_HAIKU, OMD_MODEL_SONNET, OMD_MODEL_OPUS   (override a tier's model)
+  OMD_RECURSION_LIMIT, OMD_MODEL_RETRIES, OMD_TOOL_RETRIES   (harness tuning)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 `;
 
@@ -63,6 +67,18 @@ function optionsFromFlags(
   }
   if (typeof values.workdir === "string") {
     options.workdir = values.workdir;
+  }
+  if (typeof values["recursion-limit"] === "string") {
+    const n = Number(values["recursion-limit"]);
+    if (Number.isInteger(n) && n > 0) options.recursionLimit = n;
+  }
+  if (typeof values["model-retries"] === "string") {
+    const n = Number(values["model-retries"]);
+    if (Number.isInteger(n) && n >= 0) options.modelRetries = n;
+  }
+  if (typeof values["tool-retries"] === "string") {
+    const n = Number(values["tool-retries"]);
+    if (Number.isInteger(n) && n >= 0) options.toolRetries = n;
   }
   return options;
 }
@@ -109,6 +125,11 @@ function cmdConfig(options: OhMyDcodeOptions): void {
   console.log(`Backend: ${config.backend.kind}` + (config.backend.rootDir ? ` (root: ${config.backend.rootDir})` : ""));
   console.log(`Subagents: ${config.subagents.length}`);
   console.log(`Skill dirs: ${config.skills.join(", ")}`);
+  console.log(`Recursion limit: ${config.recursionLimit}`);
+  const retries = config.middleware
+    .map((m) => `${m.kind}=${m.maxRetries}`)
+    .join(", ");
+  console.log(`Fault tolerance: ${retries || "(disabled)"}`);
 }
 
 function cmdInit(options: OhMyDcodeOptions, cwd: string, force: boolean): void {
@@ -150,6 +171,9 @@ async function main(argv: string[]): Promise<void> {
       backend: { type: "string" },
       "adversarial-model": { type: "string" },
       workdir: { type: "string" },
+      "recursion-limit": { type: "string" },
+      "model-retries": { type: "string" },
+      "tool-retries": { type: "string" },
       force: { type: "boolean", default: false },
       "non-interactive": { type: "boolean", short: "n", default: false },
       help: { type: "boolean", short: "h", default: false },

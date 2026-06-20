@@ -27,7 +27,9 @@ const config = buildDeepAgentConfig({ workdir: "/tmp/demo" });
 console.log(`Supervisor model : ${config.model}`);
 console.log(`Subagents        : ${config.subagents.length}`);
 console.log(`Backend          : ${config.backend.kind} (root ${config.backend.rootDir})`);
-console.log(`Skill dirs       : ${config.skills.length}\n`);
+console.log(`Skill dirs       : ${config.skills.length}`);
+console.log(`Recursion limit  : ${config.recursionLimit}`);
+console.log(`Fault tolerance  : ${config.middleware.map((m) => `${m.kind}=${m.maxRetries}`).join(", ")}\n`);
 
 console.log("Roster:");
 for (const a of ROSTER) {
@@ -45,6 +47,8 @@ check("every subagent has a provider:model", config.subagents.every((s) => s.mod
 check("eight workflows present", SKILLS.length === 8);
 check("scaffold covers roster + skills + AGENTS.md", scaffold.length === ROSTER.length + SKILLS.length + 1);
 check("budget routing differs from balanced for opus tier", resolveModelMap({ routing: "budget" }).opus !== models.opus);
+check("default harness installs model + tool retry middleware", config.middleware.length === 2);
+check("default recursion limit is set", config.recursionLimit > 25);
 
 console.log(`\n${failures === 0 ? "ALL GOOD" : failures + " CHECK(S) FAILED"}`);
 process.exit(failures === 0 ? 0 : 1);
