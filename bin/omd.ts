@@ -40,6 +40,9 @@ Options:
   --recursion-limit <n>     Max agent-loop steps before aborting (default: 100)
   --model-retries <n>       Retries for failed model calls; 0 disables (default: 2)
   --tool-retries <n>        Retries for failed tool calls; 0 disables (default: 2)
+  --yolo                    Unattended run: grant all permissions (no approval
+                            gating) and lift the recursion limit to ~unbounded.
+                            A given --recursion-limit still wins.
   --force                   For init: overwrite existing files
 
 Environment:
@@ -48,6 +51,13 @@ Environment:
   OMD_RECURSION_LIMIT, OMD_MODEL_RETRIES, OMD_TOOL_RETRIES   (harness tuning)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 `;
+
+/**
+ * Recursion limit applied by `--yolo`: high enough to be effectively unbounded
+ * for any real run, without being literally infinite (a finite ceiling still
+ * surfaces a runaway loop instead of spinning forever).
+ */
+const YOLO_RECURSION_LIMIT = 1_000_000;
 
 function optionsFromFlags(
   values: Record<string, unknown>,
@@ -79,6 +89,15 @@ function optionsFromFlags(
   if (typeof values["tool-retries"] === "string") {
     const n = Number(values["tool-retries"]);
     if (Number.isInteger(n) && n >= 0) options.toolRetries = n;
+  }
+  // --yolo: run fully unattended — grant all permissions (no approval gating)
+  // and lift the recursion limit to effectively unbounded. An explicit
+  // --recursion-limit still wins so it can be dialed back down.
+  if (values.yolo) {
+    options.interruptOn = {};
+    if (typeof values["recursion-limit"] !== "string") {
+      options.recursionLimit = YOLO_RECURSION_LIMIT;
+    }
   }
   return options;
 }
@@ -130,6 +149,12 @@ function cmdConfig(options: OhMyDcodeOptions): void {
     .map((m) => `${m.kind}=${m.maxRetries}`)
     .join(", ");
   console.log(`Fault tolerance: ${retries || "(disabled)"}`);
+  const gated = Object.entries(config.interruptOn)
+    .filter(([, on]) => on)
+    .map(([tool]) => tool);
+  console.log(
+    `Approvals: ${gated.length ? `gate ${gated.join(", ")}` : "all permitted (no approval gating)"}`,
+  );
 }
 
 function cmdInit(options: OhMyDcodeOptions, cwd: string, force: boolean): void {
@@ -174,6 +199,7 @@ async function main(argv: string[]): Promise<void> {
       "recursion-limit": { type: "string" },
       "model-retries": { type: "string" },
       "tool-retries": { type: "string" },
+      yolo: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "non-interactive": { type: "boolean", short: "n", default: false },
       help: { type: "boolean", short: "h", default: false },

@@ -145,7 +145,13 @@ omd config             Show the resolved model routing and backend
 omd help               Usage
 
 Flags: --routing <premium|balanced|budget>  --backend <composite|state|filesystem>  --workdir <dir>
+       --recursion-limit <n>  --model-retries <n>  --tool-retries <n>
+       --yolo   Unattended: grant all permissions (no approval gating) + ~unbounded recursion
 ```
+
+`omd run --yolo "<task>"` runs fully unattended — it clears any `interruptOn`
+approval gating and lifts the recursion limit to effectively unbounded. A given
+`--recursion-limit` still takes precedence, so you can cap an otherwise-yolo run.
 
 ---
 
