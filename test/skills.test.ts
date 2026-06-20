@@ -13,6 +13,12 @@ test("the five OMC Tier-0 workflows are present", () => {
   }
 });
 
+test("the gajae-code pipeline workflows are present", () => {
+  for (const name of ["deep-interview", "ultragoal", "deepship"]) {
+    assert.ok(getSkill(name), `missing workflow: ${name}`);
+  }
+});
+
 test("each skill has triggers and a substantive body", () => {
   for (const skill of SKILLS) {
     assert.ok(skill.triggers.length > 0, `${skill.name} has no triggers`);
@@ -50,5 +56,27 @@ test("skill bodies reference roster agents by name", () => {
   assert.ok(autopilot);
   for (const name of ["analyst", "architect", "planner", "verifier", "code-reviewer"]) {
     assert.ok(autopilot.body.includes(name), `autopilot should mention ${name}`);
+  }
+});
+
+test("deep-interview and ultragoal bodies reference roster agents", () => {
+  const deepInterview = getSkill("deep-interview");
+  assert.ok(deepInterview);
+  for (const name of ["analyst", "explore", "architect", "critic", "code-simplifier"]) {
+    assert.ok(deepInterview.body.includes(name), `deep-interview should mention ${name}`);
+  }
+
+  const ultragoal = getSkill("ultragoal");
+  assert.ok(ultragoal);
+  for (const name of ["planner", "verifier", "code-reviewer", "code-simplifier"]) {
+    assert.ok(ultragoal.body.includes(name), `ultragoal should mention ${name}`);
+  }
+});
+
+test("deepship chains the four pipeline phases by name", () => {
+  const deepship = getSkill("deepship");
+  assert.ok(deepship);
+  for (const phase of ["deep-interview", "ralplan", "ultragoal", "team"]) {
+    assert.ok(deepship.body.includes(phase), `deepship should chain ${phase}`);
   }
 });

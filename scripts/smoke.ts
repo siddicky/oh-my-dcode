@@ -42,7 +42,7 @@ console.log(`\nScaffold would write ${scaffold.length} files into .deepagents/\n
 check("supervisor routes to opus", config.model === models.opus);
 check("one subagent per roster agent", config.subagents.length === ROSTER.length);
 check("every subagent has a provider:model", config.subagents.every((s) => s.model.includes(":")));
-check("five Tier-0 workflows present", SKILLS.length === 5);
+check("eight workflows present", SKILLS.length === 8);
 check("scaffold covers roster + skills + AGENTS.md", scaffold.length === ROSTER.length + SKILLS.length + 1);
 check("budget routing differs from balanced for opus tier", resolveModelMap({ routing: "budget" }).opus !== models.opus);
 
