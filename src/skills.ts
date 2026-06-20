@@ -119,6 +119,82 @@ gate, not an execution mode.
 Do not begin implementation from inside this workflow — its output is a
 ratified plan.`,
   },
+  {
+    name: "deep-interview",
+    description:
+      "Socratic requirements gate: interview the user in rounds, stress-test from multiple angles, and crystallize a spec before any planning.",
+    triggers: ["deep-interview", "deep interview", "clarify requirements", "interview me", "socratic"],
+    body: `Clarify a vague request into a crystallized spec before any planning or code.
+This is a requirements gate — do not design or implement here.
+
+1. SCOPE — delegate to \`analyst\` to extract the goal, constraints, acceptance
+   criteria, and unknowns. For brownfield work, run \`explore\` first to map the
+   relevant existing code so the questions are grounded in reality.
+2. INTERVIEW LOOP — ask the user targeted clarifying questions in focused rounds.
+   After each answer, re-assess the remaining ambiguity across goal, constraints,
+   and acceptance criteria. Keep going until ambiguity is low or the user defers;
+   for anything deferred, propose a sensible default and record it as an
+   assumption.
+3. LATERAL REVIEW PANEL — at each ambiguity milestone, run a read-only panel in
+   parallel to challenge the emerging understanding: \`architect\` (is it
+   feasible?), \`critic\` (the contrarian case), \`code-simplifier\` (a simpler
+   framing), and \`explore\` / \`document-specialist\` (what the codebase or docs
+   actually say). Fold their findings back into the next round of questions.
+4. CRYSTALLIZE — emit one self-contained spec: a one-sentence restated goal,
+   constraints, non-goals, acceptance criteria, exposed assumptions, and any open
+   questions. This spec is the hand-off to \`ralplan\`.
+
+Never start designing or writing code from inside this workflow — its output is a
+ratified understanding, not a plan.`,
+  },
+  {
+    name: "ultragoal",
+    description:
+      "Durable multi-goal execution: decompose a ratified plan into ordered goals and drive each to a verified, reviewed checkpoint.",
+    triggers: ["ultragoal", "ultra goal", "multi-goal", "durable goals", "goal ledger"],
+    body: `Drive a ratified plan to completion as a durable set of goals, each closed only
+on verified, reviewed evidence. Use this after \`ralplan\` (or \`deep-interview\` →
+\`ralplan\`) has produced an approved plan.
+
+1. DECOMPOSE — delegate to \`planner\` to turn the plan into an ordered set of
+   independent goals (G001, G002, …), each with a concrete pass-gate (a test,
+   build result, or observable behavior). Record them with \`write_todos\`; this
+   todo list is the durable goal ledger.
+2. EXECUTE SEQUENTIALLY — drive one goal at a time. Assign each to the right
+   execution agent (\`executor\`, \`debugger\`, \`test-engineer\`, or \`designer\`) by
+   tier and lane.
+3. QUALITY PASS — once the work for a goal lands, delegate to \`code-simplifier\`
+   to strip duplication and AI-slop without changing behavior.
+4. CHECKPOINT WITH EVIDENCE — delegate to \`verifier\` to run the goal's gate and
+   report actual output, then to \`code-reviewer\` (and \`security-reviewer\` for
+   sensitive work) for the approval pass. Mark the goal done only when both pass
+   — never self-approve — then advance to the next goal.
+5. STEER — when evidence demands it, add, split, or reorder the remaining goals;
+   keep the \`write_todos\` ledger authoritative at all times. Hand off to \`team\`
+   when independent goals can be worked in parallel.
+
+Report the goals completed, each with the evidence that closed it.`,
+  },
+  {
+    name: "deepship",
+    description:
+      "Full idea-to-shipped pipeline: deep-interview → ralplan → ultragoal → team, run as four gated phases.",
+    triggers: ["deepship", "deep ship", "full pipeline", "idea to shipped", "interview to delivery"],
+    body: `Run the full idea-to-shipped pipeline as four gated phases. Do not start a phase
+until the previous gate has passed.
+
+1. CLARIFY — run the \`deep-interview\` workflow to turn the request into a
+   crystallized spec (goal, constraints, non-goals, acceptance criteria).
+2. PLAN — run the \`ralplan\` workflow to turn that spec into a ratified,
+   adversarially critiqued plan with milestones and gates.
+3. EXECUTE — run the \`ultragoal\` workflow to decompose the plan into durable
+   goals and drive each to a verified, reviewed checkpoint.
+4. PARALLELIZE — when independent work units materially benefit from it, run the
+   \`team\` workflow for coordinated parallel execution; otherwise stay sequential.
+
+Close with a final \`verifier\` end-to-end check and a \`code-reviewer\` approval
+pass, then report what shipped with the evidence that it works.`,
+  },
 ];
 
 /** Look up a skill spec by name. */

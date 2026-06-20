@@ -126,9 +126,9 @@ dcode                    # now has the OMC sub-agents + workflows available
 │   ├── executor/AGENTS.md
 │   └── … (18 total)
 └── skills/
-    ├── autopilot/SKILL.md          # one per Tier-0 workflow
+    ├── autopilot/SKILL.md          # one per workflow
     ├── ralph/SKILL.md
-    └── … (5 total)
+    └── … (8 total)
 ```
 
 ---
@@ -170,10 +170,12 @@ built-in).
 
 ---
 
-## Workflows (OMC Tier-0)
+## Workflows
 
 Shipped as Deep Agents skills the supervisor can invoke. Each describes how to
-drive the roster for that mode:
+drive the roster for that mode — the five OMC Tier-0 workflows plus the
+gajae-code pipeline (`deep-interview` → `ralplan` → `ultragoal` → `team`,
+composed end-to-end by `deepship`):
 
 | Workflow    | What it does                                                                      |
 | ----------- | -------------------------------------------------------------------------------- |
@@ -182,6 +184,9 @@ drive the roster for that mode:
 | `ultrawork` | Maximum parallelism: decompose into conflict-free lanes and fan out.             |
 | `team`      | Staged pipeline (plan → spec → execute → verify → fix) on a shared task list.    |
 | `ralplan`   | Consensus planning gate: plan, adversarially critique, converge — then hand off. |
+| `deep-interview` | Socratic requirements gate: interview in rounds, lateral-review panel, crystallize a spec. |
+| `ultragoal` | Durable multi-goal execution: decompose into ordered goals, each closed on verified, reviewed evidence. |
+| `deepship`  | Full idea-to-shipped pipeline chaining `deep-interview` → `ralplan` → `ultragoal` → `team`. |
 
 ---
 
