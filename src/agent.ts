@@ -109,7 +109,6 @@ export function buildDeepAgentConfig(
 
 /** Minimal shape of the bits of the `deepagents` module we use. */
 interface DeepAgentsModule {
-  createDeepAgent: (config: Record<string, unknown>) => DeepAgent;
   StateBackend: new () => unknown;
   FilesystemBackend: new (opts: {
     rootDir: string;
@@ -119,6 +118,16 @@ interface DeepAgentsModule {
     base: unknown,
     routes: Record<string, unknown>,
   ) => unknown;
+  createFilesystemMiddleware: (config: Record<string, unknown>) => unknown;
+  createAgentMemoryMiddleware: (config: Record<string, unknown>) => unknown;
+  createSkillsMiddleware: (config: Record<string, unknown>) => unknown;
+  createSubAgentMiddleware: (config: Record<string, unknown>) => unknown;
+}
+
+/** Minimal shape of the bits of the `langchain` module we use. */
+interface LangChainModule {
+  createAgent: (config: Record<string, unknown>) => DeepAgent;
+  humanInTheLoopMiddleware: (config: Record<string, unknown>) => unknown;
 }
 
 /** Minimal shape of a constructed Deep Agents agent. */
@@ -140,6 +149,19 @@ async function loadDeepAgents(): Promise<DeepAgentsModule> {
     throw new Error(
       "oh-my-dcode requires the 'deepagents' package at runtime. " +
         "Install it with `npm install deepagents`. " +
+        `Underlying error: ${(err as Error).message}`,
+    );
+  }
+}
+
+/** Load the `langchain` package, required by `deepagents`. */
+async function loadLangChain(): Promise<LangChainModule> {
+  const moduleName = "langchain";
+  try {
+    return (await import(moduleName)) as unknown as LangChainModule;
+  } catch (err) {
+    throw new Error(
+      "oh-my-dcode requires the 'langchain' package at runtime. " +
         `Underlying error: ${(err as Error).message}`,
     );
   }
@@ -183,15 +205,20 @@ export async function createOhMyDcode(
 ): Promise<DeepAgent> {
   const config = buildDeepAgentConfig(options);
   const dap = await loadDeepAgents();
+  const lc = await loadLangChain();
   const backend = instantiateBackend(dap, config.backend);
 
-  return dap.createDeepAgent({
+  const middlewares = [
+    dap.createFilesystemMiddleware({ backend }),
+    dap.createAgentMemoryMiddleware({ memory: config.memory }),
+    dap.createSkillsMiddleware({ skills: config.skills }),
+    dap.createSubAgentMiddleware({ subagents: config.subagents }),
+    lc.humanInTheLoopMiddleware({ interruptOn: config.interruptOn }),
+  ];
+
+  return lc.createAgent({
     model: config.model,
     systemPrompt: config.systemPrompt,
-    subagents: config.subagents,
-    skills: config.skills,
-    memory: config.memory,
-    backend,
-    interruptOn: config.interruptOn,
+    middleware: middlewares,
   });
 }
