@@ -1,6 +1,6 @@
 ---
-name: deepship
-description: Full idea-to-shipped pipeline: deep-interview → ralplan → ultragoal → team, run as four gated phases.
+name: "deepship"
+description: "Full idea-to-shipped pipeline: deep-interview → ralplan → ultragoal → team, run as four gated phases."
 triggers: ["deepship", "deep ship", "full pipeline", "idea to shipped", "interview to delivery"]
 ---
 

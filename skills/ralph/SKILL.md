@@ -1,6 +1,6 @@
 ---
-name: ralph
-description: Persistent verify/fix loop: keep iterating on a single goal until a reviewer confirms it is done.
+name: "ralph"
+description: "Persistent verify/fix loop: keep iterating on a single goal until a reviewer confirms it is done."
 triggers: ["ralph", "keep going until", "loop until done", "persist until"]
 ---
 

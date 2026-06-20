@@ -1,6 +1,6 @@
 ---
-name: team
-description: Staged pipeline of coordinated agents: plan → spec → execute → verify → fix, on a shared task list.
+name: "team"
+description: "Staged pipeline of coordinated agents: plan → spec → execute → verify → fix, on a shared task list."
 triggers: ["team", "pipeline", "coordinate agents", "staged"]
 ---
 

@@ -1,6 +1,6 @@
 ---
-name: ultragoal
-description: Durable multi-goal execution: decompose a ratified plan into ordered goals and drive each to a verified, reviewed checkpoint.
+name: "ultragoal"
+description: "Durable multi-goal execution: decompose a ratified plan into ordered goals and drive each to a verified, reviewed checkpoint."
 triggers: ["ultragoal", "ultra goal", "multi-goal", "durable goals", "goal ledger"]
 ---
 

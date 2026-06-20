@@ -30,8 +30,9 @@ test("agent markdown carries name/description/model front-matter", () => {
   const agent = ROSTER[0]!;
   const md = renderAgentMarkdown(agent, "anthropic:claude-opus-4-8");
   assert.match(md, /^---\n/);
-  assert.ok(md.includes(`name: ${agent.name}`));
-  assert.ok(md.includes("model: anthropic:claude-opus-4-8"));
+  assert.ok(md.includes(`name: ${JSON.stringify(agent.name)}`));
+  // model contains a colon → must be quoted, else YAML parse fails
+  assert.ok(md.includes('model: "anthropic:claude-opus-4-8"'));
 });
 
 test("scaffold model reflects the routing preset", () => {
@@ -41,7 +42,7 @@ test("scaffold model reflects the routing preset", () => {
   );
   assert.ok(architect);
   // architect is opus-tier; under budget that resolves to the sonnet model.
-  assert.match(architect.content, /model: anthropic:claude-sonnet-4-6/);
+  assert.match(architect.content, /model: "anthropic:claude-sonnet-4-6"/);
 });
 
 test("writeScaffold writes files to disk, then skips existing ones", () => {

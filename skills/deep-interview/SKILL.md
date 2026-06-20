@@ -1,6 +1,6 @@
 ---
-name: deep-interview
-description: Socratic requirements gate: interview the user in rounds, stress-test from multiple angles, and crystallize a spec before any planning.
+name: "deep-interview"
+description: "Socratic requirements gate: interview the user in rounds, stress-test from multiple angles, and crystallize a spec before any planning."
 triggers: ["deep-interview", "deep interview", "clarify requirements", "interview me", "socratic"]
 ---
 

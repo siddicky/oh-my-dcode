@@ -9,6 +9,7 @@
  */
 
 import type { SkillSpec } from "./types.ts";
+import { yamlString } from "./yaml.ts";
 
 export const SKILLS: readonly SkillSpec[] = [
   {
@@ -210,8 +211,8 @@ export function getSkill(name: string): SkillSpec | undefined {
 export function renderSkillMarkdown(spec: SkillSpec): string {
   const triggers = spec.triggers.map((t) => JSON.stringify(t)).join(", ");
   return `---
-name: ${spec.name}
-description: ${spec.description}
+name: ${yamlString(spec.name)}
+description: ${yamlString(spec.description)}
 triggers: [${triggers}]
 ---
 

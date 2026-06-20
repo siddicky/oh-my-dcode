@@ -22,6 +22,7 @@ import { composeRoster, resolveAgentModel } from "./agents.ts";
 import { resolveModelMap, effectiveAdversarialModel } from "./routing.ts";
 import { SKILLS, renderSkillMarkdown } from "./skills.ts";
 import { buildAgentsMd } from "./prompts.ts";
+import { yamlString } from "./yaml.ts";
 
 /** A single file to write, with a package-root-relative path. */
 export interface ScaffoldEntry {
@@ -34,9 +35,9 @@ export interface ScaffoldEntry {
 /** Render a roster agent to a Deep Agents Code `AGENTS.md` subagent file. */
 export function renderAgentMarkdown(spec: AgentSpec, model: string): string {
   return `---
-name: ${spec.name}
-description: ${spec.description}
-model: ${model}
+name: ${yamlString(spec.name)}
+description: ${yamlString(spec.description)}
+model: ${yamlString(model)}
 ---
 
 ${spec.systemPrompt.trim()}

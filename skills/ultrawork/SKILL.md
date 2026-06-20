@@ -1,6 +1,6 @@
 ---
-name: ultrawork
-description: Maximum parallelism: decompose the goal into independent units and fan them out across agents at once.
+name: "ultrawork"
+description: "Maximum parallelism: decompose the goal into independent units and fan them out across agents at once."
 triggers: ["ultrawork", "ulw", "in parallel", "all at once", "fan out"]
 ---
 

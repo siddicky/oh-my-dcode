@@ -1,6 +1,6 @@
 ---
-name: autopilot
-description: Full autonomous execution from idea to verified working code: expand → plan → build → QA → review.
+name: "autopilot"
+description: "Full autonomous execution from idea to verified working code: expand → plan → build → QA → review."
 triggers: ["autopilot", "build me", "make me", "full auto", "handle it all"]
 ---
 

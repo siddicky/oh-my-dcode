@@ -1,6 +1,6 @@
 ---
-name: ralplan
-description: Consensus planning gate: produce a plan, stress-test it from multiple perspectives, and converge before building.
+name: "ralplan"
+description: "Consensus planning gate: produce a plan, stress-test it from multiple perspectives, and converge before building."
 triggers: ["ralplan", "plan this", "consensus plan", "plan first"]
 ---
 

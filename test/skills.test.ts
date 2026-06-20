@@ -30,9 +30,24 @@ test("rendered skill markdown carries valid front-matter", () => {
   for (const skill of SKILLS) {
     const md = renderSkillMarkdown(skill);
     assert.match(md, /^---\n/);
-    assert.ok(md.includes(`name: ${skill.name}`));
-    assert.ok(md.includes(`description: ${skill.description}`));
+    assert.ok(md.includes(`name: ${JSON.stringify(skill.name)}`));
+    assert.ok(md.includes(`description: ${JSON.stringify(skill.description)}`));
     assert.ok(md.includes("triggers: ["));
+  }
+});
+
+test("front-matter scalars with colons are quoted (valid YAML)", () => {
+  // Regression: descriptions contain ':' (e.g. "…code: expand…") which breaks
+  // unquoted YAML with "mapping values are not allowed here".
+  for (const skill of SKILLS) {
+    const md = renderSkillMarkdown(skill);
+    assert.match(md, /\ndescription: "/, `${skill.name} description not quoted`);
+    if (skill.description.includes(":")) {
+      assert.ok(
+        !md.includes(`description: ${skill.description}`),
+        `${skill.name} description emitted unquoted`,
+      );
+    }
   }
 });
 

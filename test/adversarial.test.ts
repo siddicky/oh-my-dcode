@@ -109,12 +109,12 @@ test("scaffold writes gpt-5.5 into adversarial agents' frontmatter", () => {
   const critic = entries.find((e) =>
     e.path.endsWith(join("agents", "critic", "AGENTS.md")),
   );
-  assert.match(critic!.content, /model: openai:gpt-5\.5/);
+  assert.match(critic!.content, /model: "openai:gpt-5\.5"/);
   // executor (non-adversarial) keeps its tier model
   const executor = entries.find((e) =>
     e.path.endsWith(join("agents", "executor", "AGENTS.md")),
   );
-  assert.match(executor!.content, /model: anthropic:claude-sonnet-4-6/);
+  assert.match(executor!.content, /model: "anthropic:claude-sonnet-4-6"/);
 });
 
 test("config parses adversarialModel from file and env (incl. disable)", () => {
