@@ -1,0 +1,197 @@
+#!/usr/bin/env -S node --experimental-strip-types
+/**
+ * omd — the oh-my-dcode CLI.
+ *
+ * Subcommands that only inspect or scaffold (`agents`, `skills`, `config`,
+ * `init`) run with zero third-party dependencies. `run` (the default) builds a
+ * live agent and therefore requires the `deepagents` package plus a configured
+ * model provider.
+ *
+ * Runs directly from TypeScript source via Node's native type stripping
+ * (Node >= 22.6), so no build step is needed to use it.
+ */
+
+import { parseArgs } from "node:util";
+import { resolveModelMap, effectiveAdversarialModel } from "../src/routing.ts";
+import { ROSTER, resolveAgentModel } from "../src/agents.ts";
+import { SKILLS } from "../src/skills.ts";
+import { loadConfig } from "../src/config.ts";
+import { writeScaffold } from "../src/scaffold.ts";
+import { buildDeepAgentConfig } from "../src/agent.ts";
+import type { OhMyDcodeOptions } from "../src/types.ts";
+
+const USAGE = `oh-my-dcode (omd) — multi-agent orchestration for Deep Agents Code
+
+Usage:
+  omd [run] "<task>"        Orchestrate a task to completion (needs deepagents + API key)
+  omd -n "<task>"           Same as run (non-interactive single shot)
+  omd init [--force]        Write the OMC roster + workflows into ./.deepagents
+  omd agents                List the specialized agent roster and their models
+  omd skills                List the orchestration workflows
+  omd config                Show the resolved model routing and options
+  omd help                  Show this help
+
+Options:
+  --routing <preset>        premium | balanced | budget   (default: balanced)
+  --backend <kind>          composite | state | filesystem (default: composite)
+  --adversarial-model <m>   Model for adversarial agents (critic/reviewers);
+                            'none' disables (default: openai:gpt-5.5)
+  --workdir <dir>           Working directory the agent operates on
+  --force                   For init: overwrite existing files
+
+Environment:
+  OMD_ROUTING, OMD_BACKEND, OMD_WORKDIR, OMD_ADVERSARIAL_MODEL
+  OMD_MODEL_HAIKU, OMD_MODEL_SONNET, OMD_MODEL_OPUS   (override a tier's model)
+  ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
+`;
+
+function optionsFromFlags(
+  values: Record<string, unknown>,
+  cwd: string,
+): OhMyDcodeOptions {
+  const fromConfig = loadConfig(cwd);
+  const options: OhMyDcodeOptions = { ...fromConfig };
+  if (typeof values.routing === "string") {
+    options.routing = values.routing as OhMyDcodeOptions["routing"];
+  }
+  if (typeof values.backend === "string") {
+    options.backend = values.backend as OhMyDcodeOptions["backend"];
+  }
+  if (typeof values["adversarial-model"] === "string") {
+    const raw = values["adversarial-model"].trim();
+    options.adversarialModel = /^(none|off|false|disable)$/i.test(raw) ? null : raw;
+  }
+  if (typeof values.workdir === "string") {
+    options.workdir = values.workdir;
+  }
+  return options;
+}
+
+function cmdAgents(options: OhMyDcodeOptions): void {
+  const models = resolveModelMap({
+    routing: options.routing,
+    models: options.models,
+  });
+  const adversarialModel = effectiveAdversarialModel(options.adversarialModel);
+  console.log(`oh-my-dcode roster (${ROSTER.length} agents)\n`);
+  for (const agent of ROSTER) {
+    const tags = [agent.readOnly ? "read-only" : "", agent.adversarial ? "adversarial" : ""]
+      .filter(Boolean)
+      .join(", ");
+    const tagStr = tags ? ` [${tags}]` : "";
+    const model = resolveAgentModel(agent, models, adversarialModel);
+    console.log(`  ${agent.name.padEnd(20)} ${agent.lane.padEnd(10)} ${agent.tier.padEnd(7)} ${model}${tagStr}`);
+    console.log(`  ${" ".repeat(20)} ${agent.description}\n`);
+  }
+}
+
+function cmdSkills(): void {
+  console.log(`oh-my-dcode workflows (${SKILLS.length})\n`);
+  for (const skill of SKILLS) {
+    console.log(`  ${skill.name.padEnd(12)} ${skill.description}`);
+    console.log(`  ${" ".repeat(12)} triggers: ${skill.triggers.join(", ")}\n`);
+  }
+}
+
+function cmdConfig(options: OhMyDcodeOptions): void {
+  const config = buildDeepAgentConfig(options);
+  const models = resolveModelMap({
+    routing: options.routing,
+    models: options.models,
+  });
+  const adversarialModel = effectiveAdversarialModel(options.adversarialModel);
+  console.log("Resolved model routing:");
+  console.log(`  haiku  -> ${models.haiku}`);
+  console.log(`  sonnet -> ${models.sonnet}`);
+  console.log(`  opus   -> ${models.opus}`);
+  console.log(`  adversarial (critic/reviewers) -> ${adversarialModel ?? "(disabled — route at tier)"}`);
+  console.log(`\nSupervisor model: ${config.model}`);
+  console.log(`Backend: ${config.backend.kind}` + (config.backend.rootDir ? ` (root: ${config.backend.rootDir})` : ""));
+  console.log(`Subagents: ${config.subagents.length}`);
+  console.log(`Skill dirs: ${config.skills.join(", ")}`);
+}
+
+function cmdInit(options: OhMyDcodeOptions, cwd: string, force: boolean): void {
+  const result = writeScaffold(cwd, options, { force });
+  console.log(`Scaffolded oh-my-dcode into ${cwd}/.deepagents`);
+  for (const path of result.written) console.log(`  + ${path}`);
+  for (const path of result.skipped) console.log(`  = ${path} (exists; use --force to overwrite)`);
+  console.log(`\n${result.written.length} written, ${result.skipped.length} skipped.`);
+  console.log("Run the Deep Agents Code CLI (dcode) in this directory to use them.");
+}
+
+async function cmdRun(task: string, options: OhMyDcodeOptions): Promise<void> {
+  if (!task.trim()) {
+    console.error("No task provided. Usage: omd run \"<task>\"");
+    process.exitCode = 1;
+    return;
+  }
+  // Imported lazily so inspect/scaffold commands never require the SDK.
+  const { createOhMyDcode } = await import("../src/agent.ts");
+  const agent = await createOhMyDcode(options);
+  const result = await agent.invoke({
+    messages: [{ role: "user", content: task }],
+  });
+  const messages = result.messages ?? [];
+  const last = messages[messages.length - 1];
+  if (last && last.content != null) {
+    console.log(typeof last.content === "string" ? last.content : JSON.stringify(last.content, null, 2));
+  } else {
+    console.error("omd: run completed but produced no output message.");
+  }
+}
+
+async function main(argv: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      routing: { type: "string" },
+      backend: { type: "string" },
+      "adversarial-model": { type: "string" },
+      workdir: { type: "string" },
+      force: { type: "boolean", default: false },
+      "non-interactive": { type: "boolean", short: "n", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+  });
+
+  const cwd = typeof values.workdir === "string" ? values.workdir : process.cwd();
+  const options = optionsFromFlags(values, cwd);
+
+  const [command, ...rest] = positionals;
+
+  if (values.help || command === "help") {
+    console.log(USAGE);
+    return;
+  }
+
+  switch (command) {
+    case "agents":
+      return cmdAgents(options);
+    case "skills":
+      return cmdSkills();
+    case "config":
+      return cmdConfig(options);
+    case "init":
+      return cmdInit(options, cwd, Boolean(values.force));
+    case "run":
+      return cmdRun(rest.join(" "), options);
+    case undefined:
+      if (values["non-interactive"]) {
+        console.error("No task provided. Usage: omd -n \"<task>\"");
+        process.exitCode = 1;
+        return;
+      }
+      console.log(USAGE);
+      return;
+    default:
+      // Treat a bare `omd "<task>"` (no known subcommand) as a run.
+      return cmdRun([command, ...rest].join(" "), options);
+  }
+}
+
+main(process.argv.slice(2)).catch((err) => {
+  console.error(`omd: ${(err as Error).message}`);
+  process.exitCode = 1;
+});

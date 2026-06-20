@@ -1,0 +1,60 @@
+{
+  "name": "oh-my-dcode",
+  "version": "0.1.0",
+  "description": "oh-my-claudecode's multi-agent orchestration layer, ported to the LangChain Deep Agents (Deep Agents Code) framework for TypeScript.",
+  "keywords": [
+    "deepagents",
+    "deep-agents-code",
+    "langchain",
+    "agents",
+    "orchestration",
+    "oh-my-claudecode",
+    "ai",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "bin": {
+    "omd": "./bin/omd.ts"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "bin",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "gen:skills": "node --experimental-strip-types scripts/gen-skills.ts",
+    "smoke": "node --experimental-strip-types scripts/smoke.ts",
+    "omd": "node --experimental-strip-types bin/omd.ts"
+  },
+  "dependencies": {
+    "deepagents": "^1.10.5"
+  },
+  "peerDependenciesMeta": {
+    "deepagents": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
