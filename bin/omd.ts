@@ -41,6 +41,12 @@ Options:
   --model-retries <n>       Retries for failed model calls; 0 disables (default: 2)
   --tool-retries <n>        Retries for failed tool calls; opt-in, may repeat
                             side effects (default: 0)
+  --rubric "<criteria>"     Pass/fail criteria the agent self-evaluates against,
+                            iterating until all pass or the cap is hit (run only)
+  --rubric-iterations <n>   Cap on rubric self-evaluation cycles; 0 disables
+                            (default: 3)
+  --no-grader-tools         Grade from the transcript only — no shell/Playwright/
+                            LSP verification tools for the rubric grader
   --yolo                    Unattended run: grant all permissions (no approval
                             gating) and lift the recursion limit to ~unbounded.
                             A given --recursion-limit still wins.
@@ -50,6 +56,8 @@ Environment:
   OMD_ROUTING, OMD_BACKEND, OMD_WORKDIR, OMD_ADVERSARIAL_MODEL
   OMD_MODEL_HAIKU, OMD_MODEL_SONNET, OMD_MODEL_OPUS   (override a tier's model)
   OMD_RECURSION_LIMIT, OMD_MODEL_RETRIES, OMD_TOOL_RETRIES   (harness tuning)
+  OMD_RUBRIC_MAX_ITERATIONS, OMD_RUBRIC_GRADER_TIER         (rubric self-eval)
+  OMD_GRADER_TOOLS, OMD_GRADER_SHELL_TOOL                   (grader tools)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 `;
 
@@ -91,6 +99,11 @@ function optionsFromFlags(
     const n = Number(values["tool-retries"]);
     if (Number.isInteger(n) && n >= 0) options.toolRetries = n;
   }
+  if (typeof values["rubric-iterations"] === "string") {
+    const n = Number(values["rubric-iterations"]);
+    if (Number.isInteger(n) && n >= 0) options.rubricMaxIterations = n;
+  }
+  if (values["no-grader-tools"]) options.graderTools = false;
   // --yolo: run fully unattended — grant all permissions (no approval gating)
   // and lift the recursion limit to effectively unbounded. An explicit
   // --recursion-limit still wins so it can be dialed back down.
@@ -147,9 +160,23 @@ function cmdConfig(options: OhMyDcodeOptions): void {
   console.log(`Skill dirs: ${config.skills.join(", ")}`);
   console.log(`Recursion limit: ${config.recursionLimit}`);
   const retries = config.middleware
-    .map((m) => `${m.kind}=${m.maxRetries}`)
+    .map((m) => (m.kind === "rubric" ? "" : `${m.kind}=${m.maxRetries}`))
+    .filter(Boolean)
     .join(", ");
   console.log(`Fault tolerance: ${retries || "(disabled)"}`);
+  const rubric = config.middleware.find((m) => m.kind === "rubric");
+  if (rubric) {
+    const toolNames = [
+      rubric.shellTool ? "shell" : "",
+      ...rubric.mcpServers.map((s) => s.name),
+    ].filter(Boolean);
+    console.log(
+      `Rubric self-eval: max ${rubric.maxIterations} iters, grader ${rubric.model}, ` +
+        `tools ${toolNames.length ? toolNames.join("+") : "(none)"}`,
+    );
+  } else {
+    console.log("Rubric self-eval: (disabled)");
+  }
   const gated = Object.entries(config.interruptOn)
     .filter(([, on]) => on)
     .map(([tool]) => tool);
@@ -167,7 +194,11 @@ function cmdInit(options: OhMyDcodeOptions, cwd: string, force: boolean): void {
   console.log("Run the Deep Agents Code CLI (dcode) in this directory to use them.");
 }
 
-async function cmdRun(task: string, options: OhMyDcodeOptions): Promise<void> {
+async function cmdRun(
+  task: string,
+  options: OhMyDcodeOptions,
+  rubric?: string,
+): Promise<void> {
   if (!task.trim()) {
     console.error("No task provided. Usage: omd run \"<task>\"");
     process.exitCode = 1;
@@ -178,6 +209,8 @@ async function cmdRun(task: string, options: OhMyDcodeOptions): Promise<void> {
   const agent = await createOhMyDcode(options);
   const result = await agent.invoke({
     messages: [{ role: "user", content: task }],
+    // When provided, the rubric engages the self-evaluation grader loop.
+    ...(rubric ? { rubric } : {}),
   });
   const messages = result.messages ?? [];
   const last = messages[messages.length - 1];
@@ -200,6 +233,9 @@ async function main(argv: string[]): Promise<void> {
       "recursion-limit": { type: "string" },
       "model-retries": { type: "string" },
       "tool-retries": { type: "string" },
+      rubric: { type: "string" },
+      "rubric-iterations": { type: "string" },
+      "no-grader-tools": { type: "boolean", default: false },
       yolo: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "non-interactive": { type: "boolean", short: "n", default: false },
@@ -209,6 +245,7 @@ async function main(argv: string[]): Promise<void> {
 
   const cwd = typeof values.workdir === "string" ? values.workdir : process.cwd();
   const options = optionsFromFlags(values, cwd);
+  const rubric = typeof values.rubric === "string" ? values.rubric : undefined;
 
   const [command, ...rest] = positionals;
 
@@ -227,7 +264,7 @@ async function main(argv: string[]): Promise<void> {
     case "init":
       return cmdInit(options, cwd, Boolean(values.force));
     case "run":
-      return cmdRun(rest.join(" "), options);
+      return cmdRun(rest.join(" "), options, rubric);
     case undefined:
       if (values["non-interactive"]) {
         console.error("No task provided. Usage: omd -n \"<task>\"");
@@ -238,7 +275,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     default:
       // Treat a bare `omd "<task>"` (no known subcommand) as a run.
-      return cmdRun([command, ...rest].join(" "), options);
+      return cmdRun([command, ...rest].join(" "), options, rubric);
   }
 }
 

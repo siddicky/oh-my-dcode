@@ -62,6 +62,49 @@ test("parseEnvConfig reads harness tuning vars", () => {
   assert.equal(parsed.toolRetries, null); // "none" disables
 });
 
+test("parseFileConfig reads rubric self-evaluation fields", () => {
+  const parsed = parseFileConfig({
+    rubricMaxIterations: 5,
+    rubricGraderTier: "sonnet",
+    graderTools: false,
+    graderShellTool: true,
+    graderMcpServers: [
+      { name: "playwright", transport: "stdio", command: "npx", args: ["@playwright/mcp"] },
+      { name: "remote", transport: "http", url: "http://localhost:9000/mcp" },
+      { name: "", transport: "stdio" }, // dropped: empty name
+      { transport: "stdio" }, // dropped: no name
+      { name: "bad", transport: "carrier-pigeon" }, // dropped: bad transport
+    ],
+  });
+  assert.equal(parsed.rubricMaxIterations, 5);
+  assert.equal(parsed.rubricGraderTier, "sonnet");
+  assert.equal(parsed.graderTools, false);
+  assert.equal(parsed.graderShellTool, true);
+  assert.deepEqual(parsed.graderMcpServers, [
+    { name: "playwright", transport: "stdio", command: "npx", args: ["@playwright/mcp"] },
+    { name: "remote", transport: "http", url: "http://localhost:9000/mcp" },
+  ]);
+});
+
+test("parseFileConfig disables the rubric grader on null and drops bad tiers", () => {
+  assert.equal(parseFileConfig({ rubricMaxIterations: null }).rubricMaxIterations, null);
+  assert.equal(parseFileConfig({ rubricGraderTier: "ultra" }).rubricGraderTier, undefined);
+});
+
+test("parseEnvConfig reads rubric self-evaluation vars", () => {
+  const env = {
+    OMD_RUBRIC_MAX_ITERATIONS: "4",
+    OMD_RUBRIC_GRADER_TIER: "opus",
+    OMD_GRADER_TOOLS: "false",
+    OMD_GRADER_SHELL_TOOL: "1",
+  } as NodeJS.ProcessEnv;
+  const parsed = parseEnvConfig(env);
+  assert.equal(parsed.rubricMaxIterations, 4);
+  assert.equal(parsed.rubricGraderTier, "opus");
+  assert.equal(parsed.graderTools, false);
+  assert.equal(parsed.graderShellTool, true);
+});
+
 test("parseFileConfig accepts a partial routing map", () => {
   const parsed = parseFileConfig({ routing: { sonnet: "p:s" } });
   assert.deepEqual(parsed.routing, { sonnet: "p:s" });

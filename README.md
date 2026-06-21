@@ -146,6 +146,9 @@ omd help               Usage
 
 Flags: --routing <premium|balanced|budget>  --backend <composite|state|filesystem>  --workdir <dir>
        --recursion-limit <n>  --model-retries <n>  --tool-retries <n>
+       --rubric "<criteria>"  Self-evaluate against these pass/fail criteria, iterating to pass-or-cap
+       --rubric-iterations <n>   Cap on rubric self-evaluation cycles (default 3; 0 disables)
+       --no-grader-tools         Grade from the transcript only (no shell/Playwright/LSP tools)
        --yolo   Unattended: grant all permissions (no approval gating) + ~unbounded recursion
 ```
 
@@ -191,7 +194,7 @@ composed end-to-end by `deepship`):
 | `team`      | Staged pipeline (plan → spec → execute → verify → fix) on a shared task list.    |
 | `ralplan`   | Consensus planning gate: plan, adversarially critique, converge — then hand off. |
 | `deep-interview` | Socratic requirements gate: interview in rounds, lateral-review panel, crystallize a spec. |
-| `ultragoal` | Durable multi-goal execution: decompose into ordered goals, each closed on verified, reviewed evidence. |
+| `ultragoal` | Durable multi-goal execution: decompose into ordered goals, each closed when it satisfies its rubric via the self-evaluation grader loop. |
 | `deepship`  | Full idea-to-shipped pipeline chaining `deep-interview` → `ralplan` → `ultragoal` → `team`. |
 
 ---
@@ -302,6 +305,41 @@ createOhMyDcode({
 to `modelRetryMiddleware` / `toolRetryMiddleware` passed to `createDeepAgent`'s
 `middleware` option.
 
+### Rubric self-evaluation
+
+The harness also installs Deep Agents' native **`RubricMiddleware`** by default —
+a self-evaluating grader loop. It stays **dormant** until you pass a `rubric`
+(pass/fail criteria) at invoke time; then a grader sub-agent scores the output
+against every criterion, injects targeted per-criterion feedback on any failure,
+and the agent revises until all criteria pass or the `rubricMaxIterations` cap is
+hit. This is how the `ultragoal` workflow closes each goal.
+
+```ts
+const agent = await createOhMyDcode({
+  rubricMaxIterations: 3,    // grader cap (default 3; 0/null disables the middleware)
+  rubricGraderTier: "haiku", // grader model tier (default haiku — cheap scoring)
+  graderTools: true,         // give the grader verification tools (default true)
+  graderShellTool: true,     // a shell tool for build/test/lint (default true)
+  // graderMcpServers defaults to Playwright + an LSP server (launched via npx);
+  // override to point at project- or language-specific MCP servers.
+});
+
+const result = await agent.invoke({
+  messages: [{ role: "user", content: "Add a /health endpoint." }],
+  rubric: [
+    "- `npm test` passes",
+    "- GET /health returns 200 with `{ status: 'ok' }`",
+    "- No new type errors (LSP diagnostics clean)",
+  ].join("\n"),
+});
+```
+
+The grader verifies criteria empirically with its tools — running the build and
+tests over a **shell** tool, driving the UI with **Playwright**, and querying
+diagnostics over an **LSP** server — rather than trusting the transcript. The
+grader tools are loaded via [`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters);
+set `graderTools: false` for pure-LLM grading with no shell or MCP servers.
+
 ---
 
 ## Configuration
@@ -317,13 +355,18 @@ Drop a `.omd/config.json` in your project (env vars override it):
   "recursionLimit": 100,
   "modelRetries": 2,
   "toolRetries": 0,
+  "rubricMaxIterations": 3,
+  "rubricGraderTier": "haiku",
+  "graderTools": true,
+  "graderShellTool": true,
   "skillDirs": ["./my-skills"],
   "memoryPaths": ["./AGENTS.md"]
 }
 ```
 
 Env overrides: `OMD_RECURSION_LIMIT`, `OMD_MODEL_RETRIES`, `OMD_TOOL_RETRIES`
-(`0`/`none` disables a retry layer).
+(`0`/`none` disables a retry layer), `OMD_RUBRIC_MAX_ITERATIONS`,
+`OMD_RUBRIC_GRADER_TIER`, `OMD_GRADER_TOOLS`, `OMD_GRADER_SHELL_TOOL`.
 
 ---
 

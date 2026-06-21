@@ -17,6 +17,12 @@ export type {
   SkillSpec,
   DeepAgentConfig,
   BackendDescriptor,
+  MiddlewareDescriptor,
+  RetryMiddlewareDescriptor,
+  RubricMiddlewareDescriptor,
+  McpServerSpec,
+  InvokeConfig,
+  InvokeInput,
   OhMyDcodeOptions,
 } from "./types.ts";
 export { MODEL_TIERS } from "./types.ts";
@@ -64,8 +70,16 @@ export {
   bundledSkillsDir,
   resolveSubagents,
   resolveBackendDescriptor,
+  resolveMiddlewareDescriptors,
   buildDeepAgentConfig,
   createOhMyDcode,
+  DEFAULT_MODEL_RETRIES,
+  DEFAULT_TOOL_RETRIES,
+  DEFAULT_RUBRIC_MAX_ITERATIONS,
+  DEFAULT_RUBRIC_GRADER_TIER,
+  DEFAULT_GRADER_MCP_SERVERS,
+  RUBRIC_GRADER_SYSTEM_PROMPT,
+  DEFAULT_RECURSION_LIMIT,
 } from "./agent.ts";
 export type { DeepAgent } from "./agent.ts";
 

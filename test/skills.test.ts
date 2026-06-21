@@ -88,6 +88,14 @@ test("deep-interview and ultragoal bodies reference roster agents", () => {
   }
 });
 
+test("ultragoal closes goals via rubric self-evaluation", () => {
+  const ultragoal = getSkill("ultragoal");
+  assert.ok(ultragoal);
+  // The workflow now leans on the native rubric grader loop, not a manual gate.
+  assert.match(ultragoal.body, /rubric/i, "ultragoal should describe the rubric");
+  assert.match(ultragoal.description, /rubric/i);
+});
+
 test("deepship chains the four pipeline phases by name", () => {
   const deepship = getSkill("deepship");
   assert.ok(deepship);
