@@ -323,6 +323,8 @@ function parseMcpServers(value: unknown): McpServerSpec[] | undefined {
     const o = entry as Record<string, unknown>;
     if (typeof o.name !== "string" || o.name.trim() === "") continue;
     if (o.transport !== "stdio" && o.transport !== "http") continue;
+    if (o.transport === "http" && (typeof o.url !== "string" || o.url.trim() === "")) continue;
+    if (o.transport === "stdio" && (typeof o.command !== "string" || o.command.trim() === "")) continue;
     const spec: McpServerSpec = { name: o.name, transport: o.transport };
     if (typeof o.command === "string") spec.command = o.command;
     if (typeof o.url === "string") spec.url = o.url;
