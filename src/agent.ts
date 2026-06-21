@@ -31,11 +31,20 @@ import { buildSupervisorPrompt } from "./prompts.ts";
 /** Default HITL gating: none. Enable per-tool via `interruptOn` for approvals. */
 const DEFAULT_INTERRUPT_ON: Record<string, boolean> = {};
 
-/** Default retry attempts for model calls (rate limits / transient errors). */
+/**
+ * Default retry attempts for model calls. Re-issuing a failed model call has no
+ * side effects, so this is safe to enable by default and guards against rate
+ * limits and transient errors.
+ */
 export const DEFAULT_MODEL_RETRIES = 2;
 
-/** Default retry attempts for tool calls. */
-export const DEFAULT_TOOL_RETRIES = 2;
+/**
+ * Default retry attempts for tool calls. Off by default: the built-in tools
+ * include non-idempotent operations (`execute`, `write_file`, `delete_file`),
+ * and retrying a call that partially applied could repeat side effects. Opt in
+ * with `toolRetries` only when your tools are safe to re-run.
+ */
+export const DEFAULT_TOOL_RETRIES = 0;
 
 /**
  * Default agent-loop step bound. LangGraph's own default is 25, which a
@@ -119,18 +128,26 @@ export function resolveMiddlewareDescriptors(
 
 /**
  * Merge harness defaults into a per-call invoke config: supply `recursionLimit`
- * when the caller omitted one, while leaving an explicit per-call value (and
- * any `configurable`/`context`) untouched. Pure, so the wrapper is testable
- * without a live agent.
+ * when the caller omitted one, and normalize a deprecated camelCase `threadId`
+ * to the snake_case `thread_id` LangGraph actually reads (an explicit
+ * `thread_id` wins). Everything else the caller passed is left untouched. Pure,
+ * so the wrapper is testable without a live agent.
  */
 export function applyInvokeDefaults(
   config: InvokeConfig | undefined,
   recursionLimit: number,
 ): InvokeConfig {
-  return {
+  const out: InvokeConfig = {
     ...config,
     recursionLimit: config?.recursionLimit ?? recursionLimit,
   };
+
+  const configurable = config?.configurable;
+  if (configurable?.threadId !== undefined) {
+    const { threadId, ...rest } = configurable;
+    out.configurable = { ...rest, thread_id: rest.thread_id ?? threadId };
+  }
+  return out;
 }
 
 /**

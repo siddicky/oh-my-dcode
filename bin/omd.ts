@@ -39,7 +39,8 @@ Options:
   --workdir <dir>           Working directory the agent operates on
   --recursion-limit <n>     Max agent-loop steps before aborting (default: 100)
   --model-retries <n>       Retries for failed model calls; 0 disables (default: 2)
-  --tool-retries <n>        Retries for failed tool calls; 0 disables (default: 2)
+  --tool-retries <n>        Retries for failed tool calls; opt-in, may repeat
+                            side effects (default: 0)
   --yolo                    Unattended run: grant all permissions (no approval
                             gating) and lift the recursion limit to ~unbounded.
                             A given --recursion-limit still wins.

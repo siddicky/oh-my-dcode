@@ -278,16 +278,21 @@ createOhMyDcode({ interruptOn: { execute: true, write_file: true, delete_file: t
 
 ### Fault tolerance & the agent loop
 
-The harness installs LangChain's retry middleware by default so transient model
-and tool failures (rate limits, flaky network) don't sink a run, and raises the
-agent-loop step bound above LangGraph's low default of 25 — a delegating
-supervisor spends steps fast because every `task` call drives a nested
-sub-agent loop.
+The harness installs LangChain's **model** retry middleware by default so
+transient model failures (rate limits, flaky network) don't sink a run, and
+raises the agent-loop step bound above LangGraph's low default of 25 — a
+delegating supervisor spends steps fast because every `task` call drives a
+nested sub-agent loop.
+
+**Tool** retries are **off by default**: the built-in tools include
+non-idempotent operations (`execute`, `write_file`, `delete_file`), so retrying
+a partially-applied call could repeat side effects. Opt in only when the tools
+in play are safe to re-run.
 
 ```ts
 createOhMyDcode({
-  modelRetries: 2,        // retries for failed model calls (0 / null disables)
-  toolRetries: 2,         // retries for failed tool calls  (0 / null disables)
+  modelRetries: 2,        // retries for failed model calls (default 2; 0/null disables)
+  toolRetries: 0,         // retries for failed tool calls  (default 0; opt-in)
   recursionLimit: 100,    // max agent-loop steps before LangGraph aborts
 });
 ```
@@ -311,7 +316,7 @@ Drop a `.omd/config.json` in your project (env vars override it):
   "interruptOn": { "execute": true },
   "recursionLimit": 100,
   "modelRetries": 2,
-  "toolRetries": 2,
+  "toolRetries": 0,
   "skillDirs": ["./my-skills"],
   "memoryPaths": ["./AGENTS.md"]
 }

@@ -1,6 +1,6 @@
 {
   "name": "oh-my-dcode",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "oh-my-claudecode's multi-agent orchestration layer, ported to the LangChain Deep Agents (Deep Agents Code) framework for TypeScript.",
   "keywords": [
     "deepagents",
@@ -55,7 +55,8 @@
     "omd": "node --experimental-strip-types bin/omd.ts"
   },
   "dependencies": {
-    "deepagents": "^1.10.5"
+    "deepagents": "^1.10.5",
+    "langchain": "^1.5.0"
   },
   "peerDependenciesMeta": {
     "deepagents": {

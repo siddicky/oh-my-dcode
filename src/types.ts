@@ -166,8 +166,17 @@ export interface MiddlewareDescriptor {
  * checkpointer reads; a camelCase `threadId` is silently ignored.
  */
 export interface InvokeConfig {
-  /** Per-thread scoping for checkpointed conversation history. */
-  configurable?: { thread_id?: string } & Record<string, unknown>;
+  /**
+   * Per-thread scoping for checkpointed conversation history. `thread_id`
+   * (snake_case) is the key LangGraph reads. `threadId` is accepted as a
+   * deprecated alias for back-compat with pre-0.2 callers and is normalized to
+   * `thread_id` at invoke time; prefer `thread_id` in new code.
+   */
+  configurable?: {
+    thread_id?: string;
+    /** @deprecated Use `thread_id`; this camelCase alias is normalized for you. */
+    threadId?: string;
+  } & Record<string, unknown>;
   /** Max agent-loop steps before LangGraph throws (LangGraph default: 25). */
   recursionLimit?: number;
   /** Per-run context data made available to tools and middleware. */
@@ -230,7 +239,10 @@ export interface OhMyDcodeOptions {
   modelRetries?: number | null;
   /**
    * Retry attempts for failed tool calls, installed via `toolRetryMiddleware`.
-   * Defaults to `2`. Set to `0` or `null` to disable tool retries.
+   * Defaults to `0` (disabled): the built-in tools include non-idempotent
+   * operations (`execute`, `write_file`, `delete_file`), so retrying a
+   * partially-applied call could repeat side effects. Opt in (e.g. `2`) only
+   * when the tools in play are safe to re-run.
    */
   toolRetries?: number | null;
   /**

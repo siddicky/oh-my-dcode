@@ -47,7 +47,7 @@ check("every subagent has a provider:model", config.subagents.every((s) => s.mod
 check("eight workflows present", SKILLS.length === 8);
 check("scaffold covers roster + skills + AGENTS.md", scaffold.length === ROSTER.length + SKILLS.length + 1);
 check("budget routing differs from balanced for opus tier", resolveModelMap({ routing: "budget" }).opus !== models.opus);
-check("default harness installs model + tool retry middleware", config.middleware.length === 2);
+check("default harness installs model-retry middleware (tool retries opt-in)", config.middleware.length === 1 && config.middleware[0]?.kind === "model-retry");
 check("default recursion limit is set", config.recursionLimit > 25);
 
 console.log(`\n${failures === 0 ? "ALL GOOD" : failures + " CHECK(S) FAILED"}`);
