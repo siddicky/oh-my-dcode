@@ -145,7 +145,13 @@ omd config             Show the resolved model routing and backend
 omd help               Usage
 
 Flags: --routing <premium|balanced|budget>  --backend <composite|state|filesystem>  --workdir <dir>
+       --recursion-limit <n>  --model-retries <n>  --tool-retries <n>
+       --yolo   Unattended: grant all permissions (no approval gating) + ~unbounded recursion
 ```
+
+`omd run --yolo "<task>"` runs fully unattended — it clears any `interruptOn`
+approval gating and lifts the recursion limit to effectively unbounded. A given
+`--recursion-limit` still takes precedence, so you can cap an otherwise-yolo run.
 
 ---
 
@@ -263,11 +269,38 @@ OMD_ADVERSARIAL_MODEL=openai:gpt-6 omd config
 
 ### Human-in-the-loop
 
-Gate sensitive tools behind approval:
+Gate sensitive tools behind approval. Tool names are the Deep Agents built-ins
+(`execute`, `write_file`, `delete_file`, …):
 
 ```ts
-createOhMyDcode({ interruptOn: { execute: true, write_file: true, edit_file: true } });
+createOhMyDcode({ interruptOn: { execute: true, write_file: true, delete_file: true } });
 ```
+
+### Fault tolerance & the agent loop
+
+The harness installs LangChain's **model** retry middleware by default so
+transient model failures (rate limits, flaky network) don't sink a run, and
+raises the agent-loop step bound above LangGraph's low default of 25 — a
+delegating supervisor spends steps fast because every `task` call drives a
+nested sub-agent loop.
+
+**Tool** retries are **off by default**: the built-in tools include
+non-idempotent operations (`execute`, `write_file`, `delete_file`), so retrying
+a partially-applied call could repeat side effects. Opt in only when the tools
+in play are safe to re-run.
+
+```ts
+createOhMyDcode({
+  modelRetries: 2,        // retries for failed model calls (default 2; 0/null disables)
+  toolRetries: 0,         // retries for failed tool calls  (default 0; opt-in)
+  recursionLimit: 100,    // max agent-loop steps before LangGraph aborts
+});
+```
+
+`recursionLimit` is applied as the default invoke-time limit; a per-call
+`recursionLimit` in the invoke config still wins. The retry layers map directly
+to `modelRetryMiddleware` / `toolRetryMiddleware` passed to `createDeepAgent`'s
+`middleware` option.
 
 ---
 
@@ -281,10 +314,16 @@ Drop a `.omd/config.json` in your project (env vars override it):
   "backend": "composite",
   "models": { "opus": "anthropic:claude-opus-4-8" },
   "interruptOn": { "execute": true },
+  "recursionLimit": 100,
+  "modelRetries": 2,
+  "toolRetries": 0,
   "skillDirs": ["./my-skills"],
   "memoryPaths": ["./AGENTS.md"]
 }
 ```
+
+Env overrides: `OMD_RECURSION_LIMIT`, `OMD_MODEL_RETRIES`, `OMD_TOOL_RETRIES`
+(`0`/`none` disables a retry layer).
 
 ---
 

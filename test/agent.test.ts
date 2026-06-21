@@ -4,7 +4,12 @@ import {
   buildDeepAgentConfig,
   resolveSubagents,
   resolveBackendDescriptor,
+  resolveMiddlewareDescriptors,
+  applyInvokeDefaults,
   bundledSkillsDir,
+  DEFAULT_MODEL_RETRIES,
+  DEFAULT_TOOL_RETRIES,
+  DEFAULT_RECURSION_LIMIT,
 } from "../src/agent.ts";
 import { ROSTER } from "../src/agents.ts";
 import { resolveModelMap } from "../src/routing.ts";
@@ -104,6 +109,68 @@ test("buildDeepAgentConfig is hermetic: ambient OMD_MODEL_* never clobbers expli
     if (prev === undefined) delete process.env.OMD_MODEL_OPUS;
     else process.env.OMD_MODEL_OPUS = prev;
   }
+});
+
+test("default config installs only model-retry middleware (tool retries opt-in)", () => {
+  const config = buildDeepAgentConfig();
+  // Tool retries are off by default: tool calls may have side effects.
+  assert.equal(DEFAULT_TOOL_RETRIES, 0);
+  assert.deepEqual(config.middleware, [
+    { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
+  ]);
+  assert.equal(config.recursionLimit, DEFAULT_RECURSION_LIMIT);
+  // A delegating supervisor needs headroom above LangGraph's default of 25.
+  assert.ok(config.recursionLimit > 25);
+});
+
+test("retry counts are configurable; tool retries are opt-in", () => {
+  // Model retries default on, tool retries default off.
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 5 }), [
+    { kind: "model-retry", maxRetries: 5 },
+  ]);
+  // Opting tool retries in adds the second layer.
+  assert.deepEqual(resolveMiddlewareDescriptors({ toolRetries: 3 }), [
+    { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
+    { kind: "tool-retry", maxRetries: 3 },
+  ]);
+  // 0/null disables the model layer too.
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 0 }), []);
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: null }), []);
+});
+
+test("recursionLimit option flows into the config", () => {
+  assert.equal(buildDeepAgentConfig({ recursionLimit: 250 }).recursionLimit, 250);
+});
+
+test("applyInvokeDefaults supplies recursionLimit only when caller omits it", () => {
+  assert.deepEqual(applyInvokeDefaults(undefined, 100), { recursionLimit: 100 });
+  // Caller's explicit limit wins; configurable/context are preserved.
+  assert.deepEqual(
+    applyInvokeDefaults(
+      { recursionLimit: 10, configurable: { thread_id: "t1" } },
+      100,
+    ),
+    { recursionLimit: 10, configurable: { thread_id: "t1" } },
+  );
+  assert.deepEqual(
+    applyInvokeDefaults({ configurable: { thread_id: "t2" } }, 100),
+    { recursionLimit: 100, configurable: { thread_id: "t2" } },
+  );
+});
+
+test("applyInvokeDefaults normalizes the deprecated threadId alias to thread_id", () => {
+  assert.deepEqual(
+    applyInvokeDefaults({ configurable: { threadId: "legacy" } }, 100),
+    { recursionLimit: 100, configurable: { thread_id: "legacy" } },
+  );
+  // An explicit snake_case thread_id wins over the deprecated alias.
+  assert.deepEqual(
+    applyInvokeDefaults(
+      { configurable: { thread_id: "canonical", threadId: "legacy" } },
+      100,
+    ),
+    { recursionLimit: 100, configurable: { thread_id: "canonical" } },
+  );
 });
 
 test("resolveSubagents maps tiers to models", () => {

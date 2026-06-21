@@ -31,6 +31,37 @@ test("parseFileConfig keeps valid fields and drops junk", () => {
   assert.deepEqual(parsed.memoryPaths, ["./AGENTS.md"]);
 });
 
+test("parseFileConfig reads harness tuning fields", () => {
+  const parsed = parseFileConfig({
+    recursionLimit: 200,
+    modelRetries: 4,
+    toolRetries: 0,
+  });
+  assert.equal(parsed.recursionLimit, 200);
+  assert.equal(parsed.modelRetries, 4);
+  assert.equal(parsed.toolRetries, 0);
+});
+
+test("parseFileConfig disables retries on null/false and drops bad numbers", () => {
+  assert.equal(parseFileConfig({ modelRetries: null }).modelRetries, null);
+  assert.equal(parseFileConfig({ toolRetries: false }).toolRetries, null);
+  // Non-integer / non-positive recursion limits are dropped, not trusted.
+  assert.equal(parseFileConfig({ recursionLimit: 0 }).recursionLimit, undefined);
+  assert.equal(parseFileConfig({ recursionLimit: 1.5 }).recursionLimit, undefined);
+});
+
+test("parseEnvConfig reads harness tuning vars", () => {
+  const env = {
+    OMD_RECURSION_LIMIT: "150",
+    OMD_MODEL_RETRIES: "3",
+    OMD_TOOL_RETRIES: "none",
+  } as NodeJS.ProcessEnv;
+  const parsed = parseEnvConfig(env);
+  assert.equal(parsed.recursionLimit, 150);
+  assert.equal(parsed.modelRetries, 3);
+  assert.equal(parsed.toolRetries, null); // "none" disables
+});
+
 test("parseFileConfig accepts a partial routing map", () => {
   const parsed = parseFileConfig({ routing: { sonnet: "p:s" } });
   assert.deepEqual(parsed.routing, { sonnet: "p:s" });

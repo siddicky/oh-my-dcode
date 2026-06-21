@@ -67,6 +67,15 @@ export function parseFileConfig(raw: unknown): Partial<OhMyDcodeOptions> {
   const interruptOn = parseBooleanMap(obj.interruptOn);
   if (interruptOn) out.interruptOn = interruptOn;
 
+  const recursionLimit = parsePositiveInt(obj.recursionLimit);
+  if (recursionLimit !== undefined) out.recursionLimit = recursionLimit;
+
+  const modelRetries = parseRetries(obj.modelRetries);
+  if (modelRetries !== undefined) out.modelRetries = modelRetries;
+
+  const toolRetries = parseRetries(obj.toolRetries);
+  if (toolRetries !== undefined) out.toolRetries = toolRetries;
+
   const skillDirs = parseStringArray(obj.skillDirs);
   if (skillDirs) out.skillDirs = skillDirs;
 
@@ -95,6 +104,15 @@ export function parseEnvConfig(
     const raw = env.OMD_ADVERSARIAL_MODEL.trim();
     out.adversarialModel = DISABLE_TOKENS.has(raw.toLowerCase()) ? null : raw;
   }
+
+  const recursionLimit = parsePositiveInt(env.OMD_RECURSION_LIMIT);
+  if (recursionLimit !== undefined) out.recursionLimit = recursionLimit;
+
+  const modelRetries = parseRetries(env.OMD_MODEL_RETRIES);
+  if (modelRetries !== undefined) out.modelRetries = modelRetries;
+
+  const toolRetries = parseRetries(env.OMD_TOOL_RETRIES);
+  if (toolRetries !== undefined) out.toolRetries = toolRetries;
 
   // Per-tier model overrides also surface here so `models` reflects them.
   const models: Partial<ModelMap> = {};
@@ -195,6 +213,39 @@ function parseBooleanMap(
     if (typeof v === "boolean") out[key] = v;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Parse a strictly positive integer from a number or numeric string (used for
+ * `recursionLimit`). Returns `undefined` when absent or invalid.
+ */
+function parsePositiveInt(value: unknown): number | undefined {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : NaN;
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Parse a retry count: a non-negative integer enables that many retries; an
+ * explicit `null`/`false` or a disable token (`none`/`off`/…) disables retries
+ * (returns `null`). Returns `undefined` when absent or invalid (leave default).
+ */
+function parseRetries(value: unknown): number | null | undefined {
+  if (value === null || value === false) return null;
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value >= 0 ? value : undefined;
+  }
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (DISABLE_TOKENS.has(raw.toLowerCase())) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : undefined;
+  }
+  return undefined;
 }
 
 function parseStringArray(value: unknown): string[] | undefined {
