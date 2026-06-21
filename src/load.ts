@@ -13,6 +13,8 @@ export async function loadOptionalModule<T>(
   try {
     return (await import(moduleName)) as unknown as T;
   } catch (err) {
-    throw new Error(`${hint} Underlying error: ${(err as Error).message}`);
+    // `err` is not guaranteed to be an Error (a thrown string/object would yield
+    // `undefined` from `.message`); stringify defensively for a useful hint.
+    throw new Error(`${hint} Underlying error: ${String(err)}`);
   }
 }

@@ -295,7 +295,10 @@ export async function startLoopbackServer(state: string): Promise<LoopbackServer
   const port = typeof address === "object" && address ? address.port : 0;
 
   return {
-    redirectUri: `http://localhost:${port}/callback`,
+    // Use 127.0.0.1 (not `localhost`) to match the bind address: where
+    // `localhost` resolves to IPv6 `::1` first, the browser redirect could fail
+    // to reach a server bound only to the IPv4 loopback.
+    redirectUri: `http://127.0.0.1:${port}/callback`,
     waitForCode: () => codePromise,
     close: () => server.close(),
   };
@@ -305,18 +308,18 @@ export async function startLoopbackServer(state: string): Promise<LoopbackServer
 
 /** Best-effort: open `url` in the default browser. Never throws. */
 function openBrowser(url: string): void {
-  const cmd =
+  // Spawn without a shell so the URL's `&` query separators are passed as a
+  // single argument and never reinterpreted as command separators. On Windows,
+  // go through `rundll32 url.dll,FileProtocolHandler` (which receives the URL as
+  // a plain argument) rather than cmd's `start`, which would split on `&`.
+  const [cmd, args]: [string, string[]] =
     process.platform === "darwin"
-      ? "open"
+      ? ["open", [url]]
       : process.platform === "win32"
-        ? "start"
-        : "xdg-open";
+        ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
+        : ["xdg-open", [url]];
   try {
-    const child = spawn(cmd, [url], {
-      stdio: "ignore",
-      detached: true,
-      shell: process.platform === "win32",
-    });
+    const child = spawn(cmd, args, { stdio: "ignore", detached: true });
     child.on("error", () => {});
     child.unref();
   } catch {
