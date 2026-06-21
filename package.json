@@ -56,7 +56,7 @@
   },
   "dependencies": {
     "deepagents": "^1.10.5",
-    "langchain": "^1.5.0"
+    "langchain": ">=0.3.0"
   },
   "peerDependencies": {
     "deepagents": "^1.10.5",
