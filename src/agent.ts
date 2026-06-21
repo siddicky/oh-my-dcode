@@ -235,7 +235,7 @@ async function loadDeepAgents(): Promise<DeepAgentsModule> {
  * that `deepagents` is built on, so they resolve whenever the SDK is installed.
  */
 async function loadMiddleware(): Promise<MiddlewareModule> {
-  const moduleName = "langchain";
+  const moduleName = "langchain/middleware";
   try {
     return (await import(moduleName)) as unknown as MiddlewareModule;
   } catch (err) {
