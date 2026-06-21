@@ -105,6 +105,18 @@ test("parseEnvConfig reads rubric self-evaluation vars", () => {
   assert.equal(parsed.graderShellTool, true);
 });
 
+test("parseFileConfig reads the auth mode and drops junk", () => {
+  assert.equal(parseFileConfig({ auth: "oauth" }).auth, "oauth");
+  assert.equal(parseFileConfig({ auth: "api-key" }).auth, "api-key");
+  assert.equal(parseFileConfig({ auth: "subscription" }).auth, undefined);
+  assert.equal(parseFileConfig({}).auth, undefined);
+});
+
+test("parseEnvConfig reads OMD_AUTH", () => {
+  assert.equal(parseEnvConfig({ OMD_AUTH: "oauth" } as NodeJS.ProcessEnv).auth, "oauth");
+  assert.equal(parseEnvConfig({ OMD_AUTH: "nope" } as NodeJS.ProcessEnv).auth, undefined);
+});
+
 test("parseFileConfig accepts a partial routing map", () => {
   const parsed = parseFileConfig({ routing: { sonnet: "p:s" } });
   assert.deepEqual(parsed.routing, { sonnet: "p:s" });

@@ -31,6 +31,13 @@ import type {
 import { composeRoster, resolveAgentModel } from "./agents.ts";
 import { resolveModelMap, effectiveAdversarialModel } from "./routing.ts";
 import { buildSupervisorPrompt } from "./prompts.ts";
+import { loadOptionalModule } from "./load.ts";
+import { getValidAccessToken } from "./auth.ts";
+import {
+  buildAnthropicChatModel,
+  isAnthropicSpec,
+  stripProvider,
+} from "./anthropic-model.ts";
 
 /** Default HITL gating: none. Enable per-tool via `interruptOn` for approvals. */
 const DEFAULT_INTERRUPT_ON: Record<string, boolean> = {};
@@ -107,6 +114,20 @@ export const DEFAULT_GRADER_MCP_SERVERS: McpServerSpec[] = [
  * exhausts quickly; 100 leaves comfortable headroom for real orchestration.
  */
 export const DEFAULT_RECURSION_LIMIT = 100;
+
+/**
+ * Identity line the Anthropic OAuth inference endpoint requires as the first
+ * block of the system prompt when authenticating with a Claude Code / Claude
+ * Pro/Max subscription token. Prepended to every prompt that reaches an
+ * OAuth-authenticated Anthropic model; harmless and unused under API-key auth.
+ */
+export const CLAUDE_CODE_IDENTITY =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/** Prepend the Claude Code identity as the first block of a system prompt. */
+export function withClaudeCodeIdentity(prompt: string): string {
+  return `${CLAUDE_CODE_IDENTITY}\n\n${prompt}`;
+}
 
 /** Absolute path to the bundled `skills/` directory shipped with the package. */
 export function bundledSkillsDir(): string {
@@ -230,6 +251,31 @@ export function applyInvokeDefaults(
 }
 
 /**
+ * Under OAuth, default the adversarial reviewers (critic, code-reviewer,
+ * security-reviewer) to Claude so a Claude subscription alone is sufficient.
+ *
+ * Only applies when OAuth is active, the caller has not set an adversarial model
+ * explicitly (`adversarialModel === undefined`), and no `OPENAI_API_KEY` is
+ * present — then it sets `adversarialModel` to `null`, which routes adversarial
+ * agents at their normal (Anthropic) tier instead of the `openai:gpt-5.5`
+ * default. An explicit `adversarialModel` or a present `OPENAI_API_KEY` is left
+ * untouched. Returns the options unchanged in every other case.
+ */
+export function applyOauthAdversarialDefault(
+  options: OhMyDcodeOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): OhMyDcodeOptions {
+  if (
+    options.auth === "oauth" &&
+    options.adversarialModel === undefined &&
+    !env.OPENAI_API_KEY
+  ) {
+    return { ...options, adversarialModel: null };
+  }
+  return options;
+}
+
+/**
  * Pure builder: produce the full configuration for a Deep Agents agent from
  * oh-my-dcode options. No side effects, no SDK import — ideal for tests.
  */
@@ -279,7 +325,10 @@ interface DeepAgentsModule {
   ) => unknown;
   /** Self-evaluating grader loop (the rubric middleware). */
   RubricMiddleware: new (opts: {
-    model: string;
+    // A `provider:model` string under API-key auth, or a pre-built model
+    // instance when the grader runs against an OAuth-authenticated Anthropic
+    // model.
+    model: string | unknown;
     systemPrompt: string;
     maxIterations: number;
     tools?: unknown[];
@@ -359,20 +408,6 @@ interface ZodModule {
     object: (shape: Record<string, unknown>) => unknown;
     string: () => { describe: (d: string) => unknown };
   };
-}
-
-/** Dynamically import a runtime-only module without the typechecker resolving it. */
-async function loadOptionalModule<T>(
-  moduleName: string,
-  hint: string,
-): Promise<T> {
-  try {
-    // Non-literal specifier: typed as `any` so the core typechecks without the
-    // package present. Cast to the minimal surface we rely on.
-    return (await import(moduleName)) as unknown as T;
-  } catch (err) {
-    throw new Error(`${hint} Underlying error: ${(err as Error).message}`);
-  }
 }
 
 /**
@@ -468,6 +503,7 @@ async function buildGraderTools(
 async function instantiateMiddleware(
   descriptors: readonly MiddlewareDescriptor[],
   dap: DeepAgentsModule,
+  oauth?: OAuthContext,
 ): Promise<unknown[]> {
   if (descriptors.length === 0) return [];
   // `langchain/middleware` is only needed when a retry layer is requested.
@@ -476,10 +512,16 @@ async function instantiateMiddleware(
   for (const d of descriptors) {
     if (d.kind === "rubric") {
       const tools = await buildGraderTools(d);
+      // Under OAuth, swap the grader's Anthropic model for an authenticated
+      // instance and prepend the Claude Code identity to its prompt.
+      const model = oauth ? await oauth.resolveModel(d.model) : d.model;
+      const systemPrompt = oauth
+        ? oauth.identityFor(d.systemPrompt, d.model)
+        : d.systemPrompt;
       out.push(
         new dap.RubricMiddleware({
-          model: d.model,
-          systemPrompt: d.systemPrompt,
+          model,
+          systemPrompt,
           maxIterations: d.maxIterations,
           tools: tools.length > 0 ? tools : undefined,
         }),
@@ -539,21 +581,90 @@ function instantiateBackend(
 }
 
 /**
+ * The OAuth wiring used by {@link createOhMyDcode} to convert `anthropic:*`
+ * model strings into authenticated `ChatAnthropic` instances and to satisfy the
+ * inference endpoint's system-prompt requirement. Non-Anthropic specs pass
+ * through untouched so they keep using their own provider env-var keys.
+ */
+interface OAuthContext {
+  /** Spec → authenticated instance for Anthropic; the spec string otherwise. */
+  resolveModel(spec: string): Promise<unknown>;
+  /** Prepend the Claude Code identity when the spec routes to Anthropic. */
+  identityFor(prompt: string, spec: string): string;
+}
+
+/**
+ * Resolve OAuth credentials and build an {@link OAuthContext}, or return `null`
+ * when OAuth is not requested. Throws a clear, actionable error when OAuth is
+ * requested but no login is present. Instances are cached by bare model id so a
+ * routing map that reuses a model builds it once.
+ */
+async function buildOAuthContext(
+  options: OhMyDcodeOptions,
+): Promise<OAuthContext | null> {
+  if (options.auth !== "oauth") return null;
+  const token = await getValidAccessToken();
+  if (!token) {
+    throw new Error(
+      'auth: "oauth" is set but no Claude Code login was found. ' +
+        "Run `omd auth login` first (or unset auth to use ANTHROPIC_API_KEY).",
+    );
+  }
+  const cache = new Map<string, unknown>();
+  return {
+    async resolveModel(spec: string): Promise<unknown> {
+      if (!isAnthropicSpec(spec)) return spec;
+      const id = stripProvider(spec);
+      let model = cache.get(id);
+      if (!model) {
+        model = await buildAnthropicChatModel(id, token);
+        cache.set(id, model);
+      }
+      return model;
+    },
+    identityFor(prompt: string, spec: string): string {
+      return isAnthropicSpec(spec) ? withClaudeCodeIdentity(prompt) : prompt;
+    },
+  };
+}
+
+/**
  * Build a live oh-my-dcode agent on top of the Deep Agents SDK. Requires the
- * `deepagents` package and a configured model provider (e.g. `ANTHROPIC_API_KEY`).
+ * `deepagents` package and a configured model provider — either `ANTHROPIC_API_KEY`
+ * (default) or a Claude Code subscription login via `omd auth login` with
+ * `auth: "oauth"`.
  */
 export async function createOhMyDcode(
   options: OhMyDcodeOptions = {},
 ): Promise<DeepAgent> {
-  const config = buildDeepAgentConfig(options);
+  const resolved = applyOauthAdversarialDefault(options);
+  const config = buildDeepAgentConfig(resolved);
   const dap = await loadDeepAgents();
   const backend = instantiateBackend(dap, config.backend);
-  const middleware = await instantiateMiddleware(config.middleware, dap);
+  const oauth = await buildOAuthContext(resolved);
+  const middleware = await instantiateMiddleware(config.middleware, dap, oauth ?? undefined);
+
+  // Under OAuth, replace `anthropic:*` specs with authenticated model instances
+  // and prepend the Claude Code identity to each Anthropic agent's prompt. Other
+  // providers keep their string specs (and their own env-var keys).
+  const model = oauth ? await oauth.resolveModel(config.model) : config.model;
+  const systemPrompt = oauth
+    ? oauth.identityFor(config.systemPrompt, config.model)
+    : config.systemPrompt;
+  const subagents = oauth
+    ? await Promise.all(
+        config.subagents.map(async (s) => ({
+          ...s,
+          model: await oauth.resolveModel(s.model),
+          systemPrompt: oauth.identityFor(s.systemPrompt, s.model),
+        })),
+      )
+    : config.subagents;
 
   const agent = dap.createDeepAgent({
-    model: config.model,
-    systemPrompt: config.systemPrompt,
-    subagents: config.subagents,
+    model,
+    systemPrompt,
+    subagents,
     skills: config.skills,
     memory: config.memory,
     backend,

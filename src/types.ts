@@ -273,6 +273,17 @@ export interface BackendDescriptor {
 /** User-facing options for building an oh-my-dcode agent. */
 export interface OhMyDcodeOptions {
   /**
+   * How to authenticate Anthropic model calls.
+   *
+   * - `"api-key"` (default; also when omitted) — use `ANTHROPIC_API_KEY`, the
+   *   existing behavior.
+   * - `"oauth"` — use a Claude Code / Claude Pro/Max subscription token obtained
+   *   via `omd auth login`. Only `anthropic:*` models are affected; non-Anthropic
+   *   models (e.g. `openai:*` adversarial reviewers) always use their own
+   *   provider env-var keys. A string enum leaves room for future auth modes.
+   */
+  auth?: "oauth" | "api-key";
+  /**
    * Routing preset or an explicit tier→model map. Defaults to `"balanced"`.
    * A partial map is merged over the preset's defaults.
    */

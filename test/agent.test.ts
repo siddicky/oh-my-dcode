@@ -6,6 +6,9 @@ import {
   resolveBackendDescriptor,
   resolveMiddlewareDescriptors,
   applyInvokeDefaults,
+  applyOauthAdversarialDefault,
+  withClaudeCodeIdentity,
+  CLAUDE_CODE_IDENTITY,
   bundledSkillsDir,
   DEFAULT_MODEL_RETRIES,
   DEFAULT_TOOL_RETRIES,
@@ -15,7 +18,7 @@ import {
   DEFAULT_RECURSION_LIMIT,
 } from "../src/agent.ts";
 import { ROSTER } from "../src/agents.ts";
-import { resolveModelMap } from "../src/routing.ts";
+import { resolveModelMap, DEFAULT_ADVERSARIAL_MODEL } from "../src/routing.ts";
 
 /** The rubric descriptor `buildDeepAgentConfig` emits by default. */
 function defaultRubricDescriptor(
@@ -267,4 +270,59 @@ test("resolveSubagents maps tiers to models", () => {
   const subs = resolveSubagents(ROSTER, models);
   const writer = subs.find((s) => s.name === "writer");
   assert.equal(writer?.model, models.haiku); // writer is haiku-tier
+});
+
+// ---- OAuth wiring (the pure, offline pieces) --------------------------------
+
+test("buildDeepAgentConfig still emits string models (the pure builder is auth-agnostic)", () => {
+  // OAuth conversion happens only at the createOhMyDcode boundary; the builder
+  // stays string-based so all the above tests hold regardless of auth.
+  const config = buildDeepAgentConfig({ auth: "oauth" });
+  assert.equal(typeof config.model, "string");
+  for (const sub of config.subagents) assert.equal(typeof sub.model, "string");
+});
+
+test("withClaudeCodeIdentity prepends the identity once as the first block", () => {
+  const out = withClaudeCodeIdentity("Do the thing.");
+  assert.ok(out.startsWith(CLAUDE_CODE_IDENTITY));
+  assert.equal(out, `${CLAUDE_CODE_IDENTITY}\n\nDo the thing.`);
+});
+
+test("applyOauthAdversarialDefault routes reviewers to Claude only when warranted", () => {
+  // OAuth, no explicit adversarial model, no OpenAI key → disable the override.
+  assert.equal(
+    applyOauthAdversarialDefault({ auth: "oauth" }, {} as NodeJS.ProcessEnv).adversarialModel,
+    null,
+  );
+  // An OpenAI key present → leave it for the openai:gpt-5.5 default.
+  assert.equal(
+    applyOauthAdversarialDefault(
+      { auth: "oauth" },
+      { OPENAI_API_KEY: "sk-x" } as NodeJS.ProcessEnv,
+    ).adversarialModel,
+    undefined,
+  );
+  // An explicit adversarial model is always respected.
+  assert.equal(
+    applyOauthAdversarialDefault(
+      { auth: "oauth", adversarialModel: "openai:gpt-6" },
+      {} as NodeJS.ProcessEnv,
+    ).adversarialModel,
+    "openai:gpt-6",
+  );
+  // Not OAuth → untouched (keeps the openai:gpt-5.5 default downstream).
+  assert.equal(
+    applyOauthAdversarialDefault({}, {} as NodeJS.ProcessEnv).adversarialModel,
+    undefined,
+  );
+});
+
+test("under the OAuth adversarial default, reviewers route at their anthropic tier", () => {
+  // adversarialModel:null means adversarial agents fall back to their tier model.
+  const opts = applyOauthAdversarialDefault({ auth: "oauth" }, {} as NodeJS.ProcessEnv);
+  const config = buildDeepAgentConfig(opts);
+  const reviewer = config.subagents.find((s) => s.name === "code-reviewer");
+  assert.ok(reviewer);
+  assert.notEqual(reviewer.model, DEFAULT_ADVERSARIAL_MODEL);
+  assert.match(reviewer.model, /^anthropic:/);
 });

@@ -71,8 +71,11 @@ export {
   resolveSubagents,
   resolveBackendDescriptor,
   resolveMiddlewareDescriptors,
+  applyOauthAdversarialDefault,
   buildDeepAgentConfig,
   createOhMyDcode,
+  CLAUDE_CODE_IDENTITY,
+  withClaudeCodeIdentity,
   DEFAULT_MODEL_RETRIES,
   DEFAULT_TOOL_RETRIES,
   DEFAULT_RUBRIC_MAX_ITERATIONS,
@@ -82,6 +85,23 @@ export {
   DEFAULT_RECURSION_LIMIT,
 } from "./agent.ts";
 export type { DeepAgent } from "./agent.ts";
+
+export {
+  login,
+  logout,
+  status,
+  getValidAccessToken,
+  OAUTH_CLIENT_ID,
+  OAUTH_SCOPES,
+  OAUTH_BETA_HEADER,
+} from "./auth.ts";
+export type { StoredCredentials, AuthStatus } from "./auth.ts";
+
+export {
+  buildAnthropicChatModel,
+  isAnthropicSpec,
+  stripProvider,
+} from "./anthropic-model.ts";
 
 export {
   renderAgentMarkdown,
