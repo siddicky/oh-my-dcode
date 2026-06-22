@@ -6,13 +6,35 @@ import {
   resolveBackendDescriptor,
   resolveMiddlewareDescriptors,
   applyInvokeDefaults,
+  applyOauthAdversarialDefault,
+  withClaudeCodeIdentity,
+  CLAUDE_CODE_IDENTITY,
   bundledSkillsDir,
   DEFAULT_MODEL_RETRIES,
   DEFAULT_TOOL_RETRIES,
+  DEFAULT_RUBRIC_MAX_ITERATIONS,
+  DEFAULT_GRADER_MCP_SERVERS,
+  RUBRIC_GRADER_SYSTEM_PROMPT,
   DEFAULT_RECURSION_LIMIT,
 } from "../src/agent.ts";
 import { ROSTER } from "../src/agents.ts";
-import { resolveModelMap } from "../src/routing.ts";
+import { resolveModelMap, DEFAULT_ADVERSARIAL_MODEL } from "../src/routing.ts";
+
+/** The rubric descriptor `buildDeepAgentConfig` emits by default. */
+function defaultRubricDescriptor(
+  models = resolveModelMap(),
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    kind: "rubric",
+    model: models.haiku,
+    systemPrompt: RUBRIC_GRADER_SYSTEM_PROMPT,
+    maxIterations: DEFAULT_RUBRIC_MAX_ITERATIONS,
+    mcpServers: DEFAULT_GRADER_MCP_SERVERS,
+    shellTool: true,
+    ...overrides,
+  };
+}
 
 test("buildDeepAgentConfig routes the supervisor to the opus tier", () => {
   const config = buildDeepAgentConfig();
@@ -111,12 +133,14 @@ test("buildDeepAgentConfig is hermetic: ambient OMD_MODEL_* never clobbers expli
   }
 });
 
-test("default config installs only model-retry middleware (tool retries opt-in)", () => {
+test("default config installs model-retry and the rubric grader (tool retries opt-in)", () => {
   const config = buildDeepAgentConfig();
   // Tool retries are off by default: tool calls may have side effects.
   assert.equal(DEFAULT_TOOL_RETRIES, 0);
+  // The rubric grader is installed by default (dormant until a rubric is passed).
   assert.deepEqual(config.middleware, [
     { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
+    defaultRubricDescriptor(),
   ]);
   assert.equal(config.recursionLimit, DEFAULT_RECURSION_LIMIT);
   // A delegating supervisor needs headroom above LangGraph's default of 25.
@@ -124,18 +148,86 @@ test("default config installs only model-retry middleware (tool retries opt-in)"
 });
 
 test("retry counts are configurable; tool retries are opt-in", () => {
-  // Model retries default on, tool retries default off.
-  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 5 }), [
+  const models = resolveModelMap();
+  // Model retries default on, tool retries default off; rubric default on.
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 5 }, models), [
     { kind: "model-retry", maxRetries: 5 },
+    defaultRubricDescriptor(models),
   ]);
   // Opting tool retries in adds the second layer.
-  assert.deepEqual(resolveMiddlewareDescriptors({ toolRetries: 3 }), [
+  assert.deepEqual(resolveMiddlewareDescriptors({ toolRetries: 3 }, models), [
     { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
     { kind: "tool-retry", maxRetries: 3 },
+    defaultRubricDescriptor(models),
   ]);
-  // 0/null disables the model layer too.
-  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 0 }), []);
-  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: null }), []);
+  // 0/null disables the model layer too (rubric still present).
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 0 }, models), [
+    defaultRubricDescriptor(models),
+  ]);
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: null }, models), [
+    defaultRubricDescriptor(models),
+  ]);
+});
+
+test("the rubric grader is omitted when no model map is supplied", () => {
+  // The descriptor needs a concrete grader model, so a bare call emits none.
+  assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 1 }), [
+    { kind: "model-retry", maxRetries: 1 },
+  ]);
+});
+
+test("rubricMaxIterations 0/null disables the rubric grader entirely", () => {
+  const models = resolveModelMap();
+  assert.deepEqual(
+    resolveMiddlewareDescriptors({ modelRetries: 0, rubricMaxIterations: 0 }, models),
+    [],
+  );
+  assert.deepEqual(
+    resolveMiddlewareDescriptors({ modelRetries: 0, rubricMaxIterations: null }, models),
+    [],
+  );
+  assert.ok(
+    !buildDeepAgentConfig({ rubricMaxIterations: 0 }).middleware.some(
+      (m) => m.kind === "rubric",
+    ),
+  );
+});
+
+test("rubricMaxIterations flows into the grader cap", () => {
+  const rubric = buildDeepAgentConfig({ rubricMaxIterations: 7 }).middleware.find(
+    (m) => m.kind === "rubric",
+  );
+  assert.equal(rubric?.kind === "rubric" && rubric.maxIterations, 7);
+});
+
+test("rubricGraderTier routes the grader to that tier's model", () => {
+  const models = resolveModelMap();
+  const rubric = buildDeepAgentConfig({ rubricGraderTier: "sonnet" }).middleware.find(
+    (m) => m.kind === "rubric",
+  );
+  assert.equal(rubric?.kind === "rubric" && rubric.model, models.sonnet);
+});
+
+test("graderTools:false strips the grader's MCP servers and shell tool", () => {
+  const rubric = buildDeepAgentConfig({ graderTools: false }).middleware.find(
+    (m) => m.kind === "rubric",
+  );
+  assert.ok(rubric?.kind === "rubric");
+  assert.deepEqual(rubric.mcpServers, []);
+  assert.equal(rubric.shellTool, false);
+});
+
+test("graderShellTool and graderMcpServers are configurable", () => {
+  const servers = [
+    { name: "playwright", transport: "stdio" as const, command: "npx", args: ["@playwright/mcp"] },
+  ];
+  const rubric = buildDeepAgentConfig({
+    graderShellTool: false,
+    graderMcpServers: servers,
+  }).middleware.find((m) => m.kind === "rubric");
+  assert.ok(rubric?.kind === "rubric");
+  assert.equal(rubric.shellTool, false);
+  assert.deepEqual(rubric.mcpServers, servers);
 });
 
 test("recursionLimit option flows into the config", () => {
@@ -178,4 +270,59 @@ test("resolveSubagents maps tiers to models", () => {
   const subs = resolveSubagents(ROSTER, models);
   const writer = subs.find((s) => s.name === "writer");
   assert.equal(writer?.model, models.haiku); // writer is haiku-tier
+});
+
+// ---- OAuth wiring (the pure, offline pieces) --------------------------------
+
+test("buildDeepAgentConfig still emits string models (the pure builder is auth-agnostic)", () => {
+  // OAuth conversion happens only at the createOhMyDcode boundary; the builder
+  // stays string-based so all the above tests hold regardless of auth.
+  const config = buildDeepAgentConfig({ auth: "oauth" });
+  assert.equal(typeof config.model, "string");
+  for (const sub of config.subagents) assert.equal(typeof sub.model, "string");
+});
+
+test("withClaudeCodeIdentity prepends the identity once as the first block", () => {
+  const out = withClaudeCodeIdentity("Do the thing.");
+  assert.ok(out.startsWith(CLAUDE_CODE_IDENTITY));
+  assert.equal(out, `${CLAUDE_CODE_IDENTITY}\n\nDo the thing.`);
+});
+
+test("applyOauthAdversarialDefault routes reviewers to Claude only when warranted", () => {
+  // OAuth, no explicit adversarial model, no OpenAI key → disable the override.
+  assert.equal(
+    applyOauthAdversarialDefault({ auth: "oauth" }, {} as NodeJS.ProcessEnv).adversarialModel,
+    null,
+  );
+  // An OpenAI key present → leave it for the openai:gpt-5.5 default.
+  assert.equal(
+    applyOauthAdversarialDefault(
+      { auth: "oauth" },
+      { OPENAI_API_KEY: "sk-x" } as NodeJS.ProcessEnv,
+    ).adversarialModel,
+    undefined,
+  );
+  // An explicit adversarial model is always respected.
+  assert.equal(
+    applyOauthAdversarialDefault(
+      { auth: "oauth", adversarialModel: "openai:gpt-6" },
+      {} as NodeJS.ProcessEnv,
+    ).adversarialModel,
+    "openai:gpt-6",
+  );
+  // Not OAuth → untouched (keeps the openai:gpt-5.5 default downstream).
+  assert.equal(
+    applyOauthAdversarialDefault({}, {} as NodeJS.ProcessEnv).adversarialModel,
+    undefined,
+  );
+});
+
+test("under the OAuth adversarial default, reviewers route at their anthropic tier", () => {
+  // adversarialModel:null means adversarial agents fall back to their tier model.
+  const opts = applyOauthAdversarialDefault({ auth: "oauth" }, {} as NodeJS.ProcessEnv);
+  const config = buildDeepAgentConfig(opts);
+  const reviewer = config.subagents.find((s) => s.name === "code-reviewer");
+  assert.ok(reviewer);
+  assert.notEqual(reviewer.model, DEFAULT_ADVERSARIAL_MODEL);
+  assert.match(reviewer.model, /^anthropic:/);
 });

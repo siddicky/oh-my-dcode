@@ -130,11 +130,12 @@ export interface DeepAgentConfig {
    */
   interruptOn: Record<string, boolean>;
   /**
-   * Fault-tolerance middleware to install on the harness, as serializable
-   * descriptors. The adapter turns each into a real LangChain middleware
-   * instance (`modelRetryMiddleware` / `toolRetryMiddleware`) and passes the
-   * array to `createDeepAgent`'s `middleware` option. Kept as descriptors here
-   * so the builder stays dependency-free and unit-testable.
+   * Middleware to install on the harness, as serializable descriptors. The
+   * adapter turns each into a real instance — the LangChain retry middleware
+   * (`modelRetryMiddleware` / `toolRetryMiddleware`) or Deep Agents'
+   * `RubricMiddleware` (the self-evaluating grader loop) — and passes the array
+   * to `createDeepAgent`'s `middleware` option. Kept as descriptors here so the
+   * builder stays dependency-free and unit-testable.
    */
   middleware: MiddlewareDescriptor[];
   /**
@@ -147,17 +148,86 @@ export interface DeepAgentConfig {
 }
 
 /**
- * A serializable description of a fault-tolerance middleware to install. The
- * adapter resolves each to a concrete LangChain middleware at the runtime
- * boundary, mirroring how {@link BackendDescriptor} is resolved to a backend.
+ * A serializable description of a middleware to install. The adapter resolves
+ * each to a concrete middleware instance at the runtime boundary, mirroring how
+ * {@link BackendDescriptor} is resolved to a backend. Discriminated on `kind`:
  *
  * - `model-retry` → `modelRetryMiddleware` (retries failed model calls)
  * - `tool-retry`  → `toolRetryMiddleware` (retries failed tool calls)
+ * - `rubric`      → Deep Agents' `RubricMiddleware` (self-evaluating grader loop)
  */
-export interface MiddlewareDescriptor {
+export type MiddlewareDescriptor =
+  | RetryMiddlewareDescriptor
+  | RubricMiddlewareDescriptor;
+
+/** A fault-tolerance retry middleware (model- or tool-call retries). */
+export interface RetryMiddlewareDescriptor {
   kind: "model-retry" | "tool-retry";
   /** Retry attempts after the initial call (the SDK's `maxRetries` option). */
   maxRetries: number;
+}
+
+/**
+ * Deep Agents' native `RubricMiddleware`: a self-evaluating grader loop. The
+ * agent grades its own output against an invoke-time `rubric` string (per
+ * criterion) and iterates until every criterion passes or `maxIterations` is
+ * hit. The grader runs as a sub-agent with its own model, system prompt, and
+ * tools. Installed by default but dormant — it only engages when a `rubric` is
+ * supplied at invoke time (see {@link InvokeInput}).
+ */
+export interface RubricMiddlewareDescriptor {
+  kind: "rubric";
+  /** Concrete `provider:model` for the grader sub-agent (resolved from routing). */
+  model: string;
+  /** Grader system prompt: how to score per-criterion and emit fix feedback. */
+  systemPrompt: string;
+  /** Max self-evaluate→revise cycles before accepting the current output. */
+  maxIterations: number;
+  /**
+   * MCP servers whose tools the grader may call to verify criteria empirically
+   * (e.g. Playwright for browser checks, an LSP server for diagnostics). The
+   * runtime boundary loads these via `@langchain/mcp-adapters`. Empty disables
+   * MCP-backed grading tools.
+   */
+  mcpServers: McpServerSpec[];
+  /**
+   * When true, the grader also gets a shell tool to run build/test/lint
+   * commands for verification. Off means pure-LLM + MCP grading only.
+   */
+  shellTool: boolean;
+}
+
+/**
+ * A serializable description of an MCP server to connect for the rubric
+ * grader's tools. Resolved to a live connection at the runtime boundary by
+ * `@langchain/mcp-adapters` (`MultiServerMCPClient`). Kept dependency-free here
+ * so the builder stays pure and inspectable.
+ */
+export interface McpServerSpec {
+  /** Stable identifier for the server (namespaces its tools). */
+  name: string;
+  /** Connection transport: a spawned stdio subprocess or a remote HTTP server. */
+  transport: "stdio" | "http";
+  /** For `stdio`: the executable to launch (e.g. `npx`). */
+  command?: string;
+  /** For `stdio`: arguments to the command. */
+  args?: string[];
+  /** For `http`: the server URL. */
+  url?: string;
+  /** Extra environment variables for a spawned `stdio` server. */
+  env?: Record<string, string>;
+}
+
+/**
+ * The input object accepted by a live agent's `invoke`. Mirrors the Deep Agents
+ * shape: the conversation `messages` plus an optional `rubric` of pass/fail
+ * criteria the {@link RubricMiddlewareDescriptor} grader evaluates output
+ * against. When `rubric` is absent the grader stays dormant.
+ */
+export interface InvokeInput {
+  messages: Array<{ role: string; content: string }>;
+  /** Pass/fail criteria the rubric grader evaluates the output against. */
+  rubric?: string;
 }
 
 /**
@@ -203,6 +273,17 @@ export interface BackendDescriptor {
 /** User-facing options for building an oh-my-dcode agent. */
 export interface OhMyDcodeOptions {
   /**
+   * How to authenticate Anthropic model calls.
+   *
+   * - `"api-key"` (default; also when omitted) — use `ANTHROPIC_API_KEY`, the
+   *   existing behavior.
+   * - `"oauth"` — use a Claude Code / Claude Pro/Max subscription token obtained
+   *   via `omd auth login`. Only `anthropic:*` models are affected; non-Anthropic
+   *   models (e.g. `openai:*` adversarial reviewers) always use their own
+   *   provider env-var keys. A string enum leaves room for future auth modes.
+   */
+  auth?: "oauth" | "api-key";
+  /**
    * Routing preset or an explicit tier→model map. Defaults to `"balanced"`.
    * A partial map is merged over the preset's defaults.
    */
@@ -245,6 +326,41 @@ export interface OhMyDcodeOptions {
    * when the tools in play are safe to re-run.
    */
   toolRetries?: number | null;
+  /**
+   * Maximum self-evaluation iterations for the rubric grader (Deep Agents'
+   * `RubricMiddleware`). The agent re-grades its output against the invoke-time
+   * `rubric` and revises until all criteria pass or this cap is hit. Defaults to
+   * `3`. Set to `0` or `null` to disable rubric self-evaluation entirely (no
+   * rubric middleware installed). The middleware is dormant unless a `rubric` is
+   * passed at invoke time, so installing it by default is harmless.
+   */
+  rubricMaxIterations?: number | null;
+  /**
+   * Model tier for the rubric grader sub-agent. Defaults to `"haiku"` — grading
+   * is cheap, high-volume, per-criterion scoring work. Raise it for stricter
+   * evaluation.
+   */
+  rubricGraderTier?: ModelTier;
+  /**
+   * Master switch for the grader's verification tools. Defaults to `true`: the
+   * grader gets a shell tool plus the configured MCP servers (Playwright, LSP)
+   * so it can check criteria empirically. Set to `false` for pure-LLM grading
+   * from the transcript only (no shell, no MCP).
+   */
+  graderTools?: boolean;
+  /**
+   * Whether the grader gets a shell tool to run build/test/lint commands for
+   * verification. Defaults to `true`. Ignored when {@link graderTools} is
+   * `false`.
+   */
+  graderShellTool?: boolean;
+  /**
+   * MCP servers whose tools the grader may call to verify criteria (browser
+   * automation, language-server diagnostics, …). Defaults to a Playwright
+   * server plus a documented LSP server; override to point at project- or
+   * language-specific servers. Ignored when {@link graderTools} is `false`.
+   */
+  graderMcpServers?: McpServerSpec[];
   /**
    * Maximum agent-loop steps before LangGraph aborts the run. Defaults to a
    * value tuned for a delegating supervisor (LangGraph's own default of 25 is

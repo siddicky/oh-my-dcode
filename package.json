@@ -55,18 +55,35 @@
     "omd": "node --experimental-strip-types bin/omd.ts"
   },
   "dependencies": {
+    "@langchain/mcp-adapters": ">=0.4.0",
     "deepagents": "^1.10.5",
     "langchain": ">=0.3.0"
   },
   "peerDependencies": {
+    "@langchain/anthropic": ">=0.3.0",
+    "@langchain/core": ">=0.3.0",
+    "@langchain/mcp-adapters": ">=0.4.0",
     "deepagents": "^1.10.5",
-    "langchain": ">=0.3.0"
+    "langchain": ">=0.3.0",
+    "zod": ">=3.23.0"
   },
   "peerDependenciesMeta": {
+    "@langchain/anthropic": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@langchain/mcp-adapters": {
+      "optional": true
+    },
     "deepagents": {
       "optional": true
     },
     "langchain": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   },

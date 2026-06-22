@@ -17,6 +17,12 @@ export type {
   SkillSpec,
   DeepAgentConfig,
   BackendDescriptor,
+  MiddlewareDescriptor,
+  RetryMiddlewareDescriptor,
+  RubricMiddlewareDescriptor,
+  McpServerSpec,
+  InvokeConfig,
+  InvokeInput,
   OhMyDcodeOptions,
 } from "./types.ts";
 export { MODEL_TIERS } from "./types.ts";
@@ -64,10 +70,38 @@ export {
   bundledSkillsDir,
   resolveSubagents,
   resolveBackendDescriptor,
+  resolveMiddlewareDescriptors,
+  applyOauthAdversarialDefault,
   buildDeepAgentConfig,
   createOhMyDcode,
+  CLAUDE_CODE_IDENTITY,
+  withClaudeCodeIdentity,
+  DEFAULT_MODEL_RETRIES,
+  DEFAULT_TOOL_RETRIES,
+  DEFAULT_RUBRIC_MAX_ITERATIONS,
+  DEFAULT_RUBRIC_GRADER_TIER,
+  DEFAULT_GRADER_MCP_SERVERS,
+  RUBRIC_GRADER_SYSTEM_PROMPT,
+  DEFAULT_RECURSION_LIMIT,
 } from "./agent.ts";
 export type { DeepAgent } from "./agent.ts";
+
+export {
+  login,
+  logout,
+  status,
+  getValidAccessToken,
+  OAUTH_CLIENT_ID,
+  OAUTH_SCOPES,
+  OAUTH_BETA_HEADER,
+} from "./auth.ts";
+export type { StoredCredentials, AuthStatus } from "./auth.ts";
+
+export {
+  buildAnthropicChatModel,
+  isAnthropicSpec,
+  stripProvider,
+} from "./anthropic-model.ts";
 
 export {
   renderAgentMarkdown,

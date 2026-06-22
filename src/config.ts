@@ -13,7 +13,13 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ModelMap, OhMyDcodeOptions, RoutingPreset } from "./types.ts";
+import type {
+  McpServerSpec,
+  ModelMap,
+  ModelTier,
+  OhMyDcodeOptions,
+  RoutingPreset,
+} from "./types.ts";
 import { MODEL_TIERS } from "./types.ts";
 import { isRoutingPreset } from "./routing.ts";
 
@@ -32,6 +38,11 @@ function isBackendKind(value: unknown): value is BackendKind {
   );
 }
 
+/** Validate an auth mode (`oauth`/`api-key`); undefined when unrecognized. */
+function parseAuthMode(value: unknown): OhMyDcodeOptions["auth"] | undefined {
+  return value === "oauth" || value === "api-key" ? value : undefined;
+}
+
 /**
  * Normalize an arbitrary parsed JSON value into a safe partial set of options.
  * Unknown keys are ignored; malformed values are dropped rather than trusted.
@@ -40,6 +51,9 @@ export function parseFileConfig(raw: unknown): Partial<OhMyDcodeOptions> {
   if (raw === null || typeof raw !== "object") return {};
   const obj = raw as Record<string, unknown>;
   const out: Partial<OhMyDcodeOptions> = {};
+
+  const auth = parseAuthMode(obj.auth);
+  if (auth !== undefined) out.auth = auth;
 
   if (isRoutingPreset(obj.routing)) {
     out.routing = obj.routing as RoutingPreset;
@@ -76,6 +90,20 @@ export function parseFileConfig(raw: unknown): Partial<OhMyDcodeOptions> {
   const toolRetries = parseRetries(obj.toolRetries);
   if (toolRetries !== undefined) out.toolRetries = toolRetries;
 
+  // Rubric self-evaluation: cap follows the same retry semantics (0/null/token
+  // disables); grader tier is a model tier; the tool switches are booleans.
+  const rubricMaxIterations = parseRetries(obj.rubricMaxIterations);
+  if (rubricMaxIterations !== undefined) out.rubricMaxIterations = rubricMaxIterations;
+
+  const rubricGraderTier = parseTier(obj.rubricGraderTier);
+  if (rubricGraderTier !== undefined) out.rubricGraderTier = rubricGraderTier;
+
+  if (typeof obj.graderTools === "boolean") out.graderTools = obj.graderTools;
+  if (typeof obj.graderShellTool === "boolean") out.graderShellTool = obj.graderShellTool;
+
+  const graderMcpServers = parseMcpServers(obj.graderMcpServers);
+  if (graderMcpServers !== undefined) out.graderMcpServers = graderMcpServers;
+
   const skillDirs = parseStringArray(obj.skillDirs);
   if (skillDirs) out.skillDirs = skillDirs;
 
@@ -90,6 +118,9 @@ export function parseEnvConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Partial<OhMyDcodeOptions> {
   const out: Partial<OhMyDcodeOptions> = {};
+
+  const auth = parseAuthMode(env.OMD_AUTH);
+  if (auth !== undefined) out.auth = auth;
 
   if (isRoutingPreset(env.OMD_ROUTING)) {
     out.routing = env.OMD_ROUTING as RoutingPreset;
@@ -113,6 +144,18 @@ export function parseEnvConfig(
 
   const toolRetries = parseRetries(env.OMD_TOOL_RETRIES);
   if (toolRetries !== undefined) out.toolRetries = toolRetries;
+
+  const rubricMaxIterations = parseRetries(env.OMD_RUBRIC_MAX_ITERATIONS);
+  if (rubricMaxIterations !== undefined) out.rubricMaxIterations = rubricMaxIterations;
+
+  const rubricGraderTier = parseTier(env.OMD_RUBRIC_GRADER_TIER);
+  if (rubricGraderTier !== undefined) out.rubricGraderTier = rubricGraderTier;
+
+  const graderTools = parseBoolean(env.OMD_GRADER_TOOLS);
+  if (graderTools !== undefined) out.graderTools = graderTools;
+
+  const graderShellTool = parseBoolean(env.OMD_GRADER_SHELL_TOOL);
+  if (graderShellTool !== undefined) out.graderShellTool = graderShellTool;
 
   // Per-tier model overrides also surface here so `models` reflects them.
   const models: Partial<ModelMap> = {};
@@ -253,5 +296,59 @@ function parseStringArray(value: unknown): string[] | undefined {
   const out = value.filter(
     (v): v is string => typeof v === "string" && v.trim() !== "",
   );
+  return out.length > 0 ? out : undefined;
+}
+
+/** Validate a model tier (`haiku`/`sonnet`/`opus`); undefined when invalid. */
+function parseTier(value: unknown): ModelTier | undefined {
+  return typeof value === "string" &&
+    (MODEL_TIERS as readonly string[]).includes(value)
+    ? (value as ModelTier)
+    : undefined;
+}
+
+/**
+ * Parse a boolean from a real boolean or a common truthy/falsy string
+ * (`true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`). Returns `undefined` when
+ * absent or unrecognized, so an unset value leaves the default in place.
+ */
+function parseBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(raw)) return true;
+  if (["false", "0", "no", "off"].includes(raw)) return false;
+  return undefined;
+}
+
+/**
+ * Validate an array of MCP server specs from parsed JSON. Each entry needs a
+ * non-empty `name` and a `stdio` or `http` transport; malformed entries are
+ * dropped. Returns `undefined` when nothing valid is present (leave default).
+ */
+function parseMcpServers(value: unknown): McpServerSpec[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: McpServerSpec[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object") continue;
+    const o = entry as Record<string, unknown>;
+    if (typeof o.name !== "string" || o.name.trim() === "") continue;
+    if (o.transport !== "stdio" && o.transport !== "http") continue;
+    if (o.transport === "http" && (typeof o.url !== "string" || o.url.trim() === "")) continue;
+    if (o.transport === "stdio" && (typeof o.command !== "string" || o.command.trim() === "")) continue;
+    const spec: McpServerSpec = { name: o.name, transport: o.transport };
+    if (typeof o.command === "string") spec.command = o.command;
+    if (typeof o.url === "string") spec.url = o.url;
+    const args = parseStringArray(o.args);
+    if (args) spec.args = args;
+    if (o.env !== null && typeof o.env === "object") {
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(o.env as Record<string, unknown>)) {
+        if (typeof v === "string") env[k] = v;
+      }
+      if (Object.keys(env).length > 0) spec.env = env;
+    }
+    out.push(spec);
+  }
   return out.length > 0 ? out : undefined;
 }

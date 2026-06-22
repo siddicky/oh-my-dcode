@@ -19,14 +19,25 @@ import type {
   BackendDescriptor,
   DeepAgentConfig,
   InvokeConfig,
+  InvokeInput,
+  McpServerSpec,
   MiddlewareDescriptor,
   ModelMap,
+  ModelTier,
   OhMyDcodeOptions,
   ResolvedSubagent,
+  RubricMiddlewareDescriptor,
 } from "./types.ts";
 import { composeRoster, resolveAgentModel } from "./agents.ts";
 import { resolveModelMap, effectiveAdversarialModel } from "./routing.ts";
 import { buildSupervisorPrompt } from "./prompts.ts";
+import { loadOptionalModule } from "./load.ts";
+import { getValidAccessToken } from "./auth.ts";
+import {
+  buildAnthropicChatModel,
+  isAnthropicSpec,
+  stripProvider,
+} from "./anthropic-model.ts";
 
 /** Default HITL gating: none. Enable per-tool via `interruptOn` for approvals. */
 const DEFAULT_INTERRUPT_ON: Record<string, boolean> = {};
@@ -47,11 +58,76 @@ export const DEFAULT_MODEL_RETRIES = 2;
 export const DEFAULT_TOOL_RETRIES = 0;
 
 /**
+ * Default cap on the rubric grader's self-evaluate→revise cycles. Three rounds
+ * balance output quality against the cost and latency of re-grading; cheap to
+ * tune via `rubricMaxIterations`.
+ */
+export const DEFAULT_RUBRIC_MAX_ITERATIONS = 3;
+
+/** Default model tier for the rubric grader: cheap, high-volume scoring work. */
+export const DEFAULT_RUBRIC_GRADER_TIER: ModelTier = "haiku";
+
+/**
+ * System prompt for the rubric grader sub-agent. Encodes the "never
+ * self-approve" discipline as grading rigor: score each criterion independently,
+ * verify with tools rather than trusting the transcript, and only pass when
+ * every criterion holds.
+ */
+export const RUBRIC_GRADER_SYSTEM_PROMPT = `You are a strict output grader. You are given a rubric of pass/fail criteria and
+the agent's latest output. Score every criterion independently as PASS or FAIL
+with a one-line justification grounded in concrete evidence.
+
+Verify, do not trust. When a criterion is checkable, use your tools to confirm it
+empirically rather than believing the transcript: run the build, tests, or lint
+with the shell tool; drive the page with the Playwright tools; query diagnostics,
+definitions, and references with the language-server (LSP) tools. Do not award
+partial credit and do not approve work the output does not actually demonstrate.
+
+For every FAIL, emit a specific, actionable instruction describing exactly what
+must change to pass. Return an overall PASS only when every criterion passes.`;
+
+/**
+ * Default MCP servers the rubric grader connects for verification tools:
+ * Playwright for browser automation and a language server for code intelligence.
+ * Both launch on demand via `npx` (no hard dependency). The LSP entry is a
+ * sensible default — override `graderMcpServers` to point at a project- or
+ * language-specific server.
+ */
+export const DEFAULT_GRADER_MCP_SERVERS: McpServerSpec[] = [
+  {
+    name: "playwright",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@playwright/mcp@latest"],
+  },
+  {
+    name: "lsp",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "mcp-language-server@latest"],
+  },
+];
+
+/**
  * Default agent-loop step bound. LangGraph's own default is 25, which a
  * delegating supervisor (each `task` call drives a nested sub-agent loop)
  * exhausts quickly; 100 leaves comfortable headroom for real orchestration.
  */
 export const DEFAULT_RECURSION_LIMIT = 100;
+
+/**
+ * Identity line the Anthropic OAuth inference endpoint requires as the first
+ * block of the system prompt when authenticating with a Claude Code / Claude
+ * Pro/Max subscription token. Prepended to every prompt that reaches an
+ * OAuth-authenticated Anthropic model; harmless and unused under API-key auth.
+ */
+export const CLAUDE_CODE_IDENTITY =
+  "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/** Prepend the Claude Code identity as the first block of a system prompt. */
+export function withClaudeCodeIdentity(prompt: string): string {
+  return `${CLAUDE_CODE_IDENTITY}\n\n${prompt}`;
+}
 
 /** Absolute path to the bundled `skills/` directory shipped with the package. */
 export function bundledSkillsDir(): string {
@@ -98,14 +174,20 @@ export function resolveBackendDescriptor(
 }
 
 /**
- * Resolve the fault-tolerance middleware to install, as descriptors.
+ * Resolve the middleware to install, as descriptors.
  *
- * Retry counts follow the adversarial-model convention: an absent option
- * (`undefined`) means "use the default"; an explicit `null` or `0` disables
- * that retry layer. A descriptor is emitted only for a positive count.
+ * Retry and rubric caps follow the adversarial-model convention: an absent
+ * option (`undefined`) means "use the default"; an explicit `null` or `0`
+ * disables that layer. A retry descriptor is emitted only for a positive count.
+ *
+ * The rubric descriptor needs a concrete grader model, so it is emitted only
+ * when a resolved {@link ModelMap} is supplied. Callers that build the full
+ * config (`buildDeepAgentConfig`) always pass one; bare callers that omit it
+ * simply get no rubric layer.
  */
 export function resolveMiddlewareDescriptors(
   options: OhMyDcodeOptions = {},
+  models?: ModelMap,
 ): MiddlewareDescriptor[] {
   const descriptors: MiddlewareDescriptor[] = [];
   const modelRetries =
@@ -116,12 +198,30 @@ export function resolveMiddlewareDescriptors(
     options.toolRetries === undefined
       ? DEFAULT_TOOL_RETRIES
       : options.toolRetries;
+  const rubricMaxIterations =
+    options.rubricMaxIterations === undefined
+      ? DEFAULT_RUBRIC_MAX_ITERATIONS
+      : options.rubricMaxIterations;
 
   if (modelRetries != null && modelRetries > 0) {
     descriptors.push({ kind: "model-retry", maxRetries: modelRetries });
   }
   if (toolRetries != null && toolRetries > 0) {
     descriptors.push({ kind: "tool-retry", maxRetries: toolRetries });
+  }
+  if (rubricMaxIterations != null && rubricMaxIterations > 0 && models) {
+    const tier = options.rubricGraderTier ?? DEFAULT_RUBRIC_GRADER_TIER;
+    const toolsOff = options.graderTools === false;
+    descriptors.push({
+      kind: "rubric",
+      model: models[tier],
+      systemPrompt: RUBRIC_GRADER_SYSTEM_PROMPT,
+      maxIterations: rubricMaxIterations,
+      mcpServers: toolsOff
+        ? []
+        : (options.graderMcpServers ?? DEFAULT_GRADER_MCP_SERVERS),
+      shellTool: toolsOff ? false : (options.graderShellTool ?? true),
+    });
   }
   return descriptors;
 }
@@ -148,6 +248,31 @@ export function applyInvokeDefaults(
     out.configurable = { ...rest, thread_id: rest.thread_id ?? threadId };
   }
   return out;
+}
+
+/**
+ * Under OAuth, default the adversarial reviewers (critic, code-reviewer,
+ * security-reviewer) to Claude so a Claude subscription alone is sufficient.
+ *
+ * Only applies when OAuth is active, the caller has not set an adversarial model
+ * explicitly (`adversarialModel === undefined`), and no `OPENAI_API_KEY` is
+ * present — then it sets `adversarialModel` to `null`, which routes adversarial
+ * agents at their normal (Anthropic) tier instead of the `openai:gpt-5.5`
+ * default. An explicit `adversarialModel` or a present `OPENAI_API_KEY` is left
+ * untouched. Returns the options unchanged in every other case.
+ */
+export function applyOauthAdversarialDefault(
+  options: OhMyDcodeOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): OhMyDcodeOptions {
+  if (
+    options.auth === "oauth" &&
+    options.adversarialModel === undefined &&
+    !env.OPENAI_API_KEY
+  ) {
+    return { ...options, adversarialModel: null };
+  }
+  return options;
 }
 
 /**
@@ -179,7 +304,7 @@ export function buildDeepAgentConfig(
     memory: options.memoryPaths ?? [],
     backend: resolveBackendDescriptor(options, workdir),
     interruptOn: options.interruptOn ?? DEFAULT_INTERRUPT_ON,
-    middleware: resolveMiddlewareDescriptors(options),
+    middleware: resolveMiddlewareDescriptors(options, models),
     recursionLimit: options.recursionLimit ?? DEFAULT_RECURSION_LIMIT,
   };
 }
@@ -198,12 +323,22 @@ interface DeepAgentsModule {
     base: unknown,
     routes: Record<string, unknown>,
   ) => unknown;
+  /** Self-evaluating grader loop (the rubric middleware). */
+  RubricMiddleware: new (opts: {
+    // A `provider:model` string under API-key auth, or a pre-built model
+    // instance when the grader runs against an OAuth-authenticated Anthropic
+    // model.
+    model: string | unknown;
+    systemPrompt: string;
+    maxIterations: number;
+    tools?: unknown[];
+  }) => unknown;
 }
 
 /** Minimal shape of a constructed Deep Agents agent. */
 export interface DeepAgent {
   invoke: (
-    input: { messages: Array<{ role: string; content: string }> },
+    input: InvokeInput,
     config?: InvokeConfig,
   ) => Promise<{ messages: Array<{ content?: unknown }> }>;
 }
@@ -248,17 +383,162 @@ async function loadMiddleware(): Promise<MiddlewareModule> {
   }
 }
 
-/** Turn middleware descriptors into concrete LangChain middleware instances. */
+/** Minimal shape of an `@langchain/mcp-adapters` client. */
+interface McpClient {
+  getTools: () => Promise<unknown[]>;
+  close?: () => Promise<void>;
+}
+
+/** Minimal shape of the `@langchain/mcp-adapters` module we use. */
+interface McpAdaptersModule {
+  MultiServerMCPClient: new (config: Record<string, unknown>) => McpClient;
+}
+
+/** Minimal shape of the `@langchain/core/tools` `tool` factory. */
+interface ToolsModule {
+  tool: (
+    fn: (input: { command: string }) => Promise<string>,
+    config: { name: string; description: string; schema: unknown },
+  ) => unknown;
+}
+
+/** Minimal shape of the `zod` surface used to schema the shell tool. */
+interface ZodModule {
+  z: {
+    object: (shape: Record<string, unknown>) => unknown;
+    string: () => { describe: (d: string) => unknown };
+  };
+}
+
+/**
+ * Build a shell tool the grader can use to run build/test/lint commands and
+ * report their exit code and output, so rubric criteria are verified
+ * empirically rather than from the transcript.
+ */
+async function buildShellTool(): Promise<unknown> {
+  const { tool } = await loadOptionalModule<ToolsModule>(
+    "@langchain/core/tools",
+    "The rubric grader's shell tool requires '@langchain/core' (a peer of 'langchain').",
+  );
+  const { z } = await loadOptionalModule<ZodModule>(
+    "zod",
+    "The rubric grader's shell tool requires 'zod' (a peer of 'langchain').",
+  );
+  const { promisify } = await import("node:util");
+  const { exec } = await import("node:child_process");
+  const execAsync = promisify(exec);
+
+  return tool(
+    async ({ command }) => {
+      try {
+        const { stdout, stderr } = await execAsync(command, {
+          timeout: 600_000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+        return JSON.stringify({ exitCode: 0, stdout, stderr });
+      } catch (err) {
+        const e = err as {
+          code?: number;
+          stdout?: string;
+          stderr?: string;
+          message?: string;
+        };
+        return JSON.stringify({
+          exitCode: typeof e.code === "number" ? e.code : 1,
+          stdout: e.stdout ?? "",
+          stderr: e.stderr ?? e.message ?? "",
+        });
+      }
+    },
+    {
+      name: "shell",
+      description:
+        "Run a shell command (build, tests, lint, …) and return its exit code, " +
+        "stdout, and stderr. Use to verify rubric criteria empirically.",
+      schema: z.object({
+        command: z.string().describe("The shell command to execute."),
+      }),
+    },
+  );
+}
+
+/**
+ * Assemble the grader's verification tools from a rubric descriptor: tools
+ * exposed by the configured MCP servers (e.g. Playwright, LSP), plus an optional
+ * shell tool. Returns an empty array when the grader is configured tool-less.
+ */
+async function buildGraderTools(
+  descriptor: RubricMiddlewareDescriptor,
+): Promise<unknown[]> {
+  const tools: unknown[] = [];
+
+  if (descriptor.mcpServers.length > 0) {
+    const { MultiServerMCPClient } = await loadOptionalModule<McpAdaptersModule>(
+      "@langchain/mcp-adapters",
+      "The rubric grader's MCP tools require the '@langchain/mcp-adapters' package. " +
+        "Install it, or disable grader tools with `{ graderTools: false }`.",
+    );
+    const servers: Record<string, unknown> = {};
+    for (const s of descriptor.mcpServers) {
+      if (s.transport === "http") {
+        if (!s.url) continue;
+        servers[s.name] = { transport: "http", url: s.url };
+      } else {
+        if (!s.command) continue;
+        servers[s.name] = { transport: "stdio", command: s.command, args: s.args ?? [], env: s.env };
+      }
+    }
+    // The subprocess-backed client stays alive for the process lifetime; for a
+    // single-shot run its servers exit with the parent. A long-lived library
+    // caller that needs deterministic teardown should close it (follow-up).
+    const client = new MultiServerMCPClient({ mcpServers: servers });
+    tools.push(...(await client.getTools()));
+  }
+
+  if (descriptor.shellTool) {
+    tools.push(await buildShellTool());
+  }
+
+  return tools;
+}
+
+/** Turn middleware descriptors into concrete middleware instances. */
 async function instantiateMiddleware(
   descriptors: readonly MiddlewareDescriptor[],
+  dap: DeepAgentsModule,
+  oauth?: OAuthContext,
 ): Promise<unknown[]> {
   if (descriptors.length === 0) return [];
-  const lc = await loadMiddleware();
-  return descriptors.map((d) =>
-    d.kind === "model-retry"
-      ? lc.modelRetryMiddleware({ maxRetries: d.maxRetries })
-      : lc.toolRetryMiddleware({ maxRetries: d.maxRetries }),
-  );
+  // `langchain/middleware` is only needed when a retry layer is requested.
+  let lc: MiddlewareModule | undefined;
+  const out: unknown[] = [];
+  for (const d of descriptors) {
+    if (d.kind === "rubric") {
+      const tools = await buildGraderTools(d);
+      // Under OAuth, swap the grader's Anthropic model for an authenticated
+      // instance and prepend the Claude Code identity to its prompt.
+      const model = oauth ? await oauth.resolveModel(d.model) : d.model;
+      const systemPrompt = oauth
+        ? oauth.identityFor(d.systemPrompt, d.model)
+        : d.systemPrompt;
+      out.push(
+        new dap.RubricMiddleware({
+          model,
+          systemPrompt,
+          maxIterations: d.maxIterations,
+          tools: tools.length > 0 ? tools : undefined,
+        }),
+      );
+    } else {
+      lc ??= await loadMiddleware();
+      out.push(
+        d.kind === "model-retry"
+          ? lc.modelRetryMiddleware({ maxRetries: d.maxRetries })
+          : lc.toolRetryMiddleware({ maxRetries: d.maxRetries }),
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -269,10 +549,8 @@ async function instantiateMiddleware(
 function withInvokeDefaults(agent: DeepAgent, recursionLimit: number): DeepAgent {
   const invoke = agent.invoke.bind(agent);
   return Object.assign(agent, {
-    invoke: (
-      input: { messages: Array<{ role: string; content: string }> },
-      config?: InvokeConfig,
-    ) => invoke(input, applyInvokeDefaults(config, recursionLimit)),
+    invoke: (input: InvokeInput, config?: InvokeConfig) =>
+      invoke(input, applyInvokeDefaults(config, recursionLimit)),
   });
 }
 
@@ -306,21 +584,90 @@ function instantiateBackend(
 }
 
 /**
+ * The OAuth wiring used by {@link createOhMyDcode} to convert `anthropic:*`
+ * model strings into authenticated `ChatAnthropic` instances and to satisfy the
+ * inference endpoint's system-prompt requirement. Non-Anthropic specs pass
+ * through untouched so they keep using their own provider env-var keys.
+ */
+interface OAuthContext {
+  /** Spec → authenticated instance for Anthropic; the spec string otherwise. */
+  resolveModel(spec: string): Promise<unknown>;
+  /** Prepend the Claude Code identity when the spec routes to Anthropic. */
+  identityFor(prompt: string, spec: string): string;
+}
+
+/**
+ * Resolve OAuth credentials and build an {@link OAuthContext}, or return `null`
+ * when OAuth is not requested. Throws a clear, actionable error when OAuth is
+ * requested but no login is present. Instances are cached by bare model id so a
+ * routing map that reuses a model builds it once.
+ */
+async function buildOAuthContext(
+  options: OhMyDcodeOptions,
+): Promise<OAuthContext | null> {
+  if (options.auth !== "oauth") return null;
+  const token = await getValidAccessToken();
+  if (!token) {
+    throw new Error(
+      'auth: "oauth" is set but no Claude Code login was found. ' +
+        "Run `omd auth login` first (or unset auth to use ANTHROPIC_API_KEY).",
+    );
+  }
+  const cache = new Map<string, unknown>();
+  return {
+    async resolveModel(spec: string): Promise<unknown> {
+      if (!isAnthropicSpec(spec)) return spec;
+      const id = stripProvider(spec);
+      let model = cache.get(id);
+      if (!model) {
+        model = await buildAnthropicChatModel(id, token);
+        cache.set(id, model);
+      }
+      return model;
+    },
+    identityFor(prompt: string, spec: string): string {
+      return isAnthropicSpec(spec) ? withClaudeCodeIdentity(prompt) : prompt;
+    },
+  };
+}
+
+/**
  * Build a live oh-my-dcode agent on top of the Deep Agents SDK. Requires the
- * `deepagents` package and a configured model provider (e.g. `ANTHROPIC_API_KEY`).
+ * `deepagents` package and a configured model provider — either `ANTHROPIC_API_KEY`
+ * (default) or a Claude Code subscription login via `omd auth login` with
+ * `auth: "oauth"`.
  */
 export async function createOhMyDcode(
   options: OhMyDcodeOptions = {},
 ): Promise<DeepAgent> {
-  const config = buildDeepAgentConfig(options);
+  const resolved = applyOauthAdversarialDefault(options);
+  const config = buildDeepAgentConfig(resolved);
   const dap = await loadDeepAgents();
   const backend = instantiateBackend(dap, config.backend);
-  const middleware = await instantiateMiddleware(config.middleware);
+  const oauth = await buildOAuthContext(resolved);
+  const middleware = await instantiateMiddleware(config.middleware, dap, oauth ?? undefined);
+
+  // Under OAuth, replace `anthropic:*` specs with authenticated model instances
+  // and prepend the Claude Code identity to each Anthropic agent's prompt. Other
+  // providers keep their string specs (and their own env-var keys).
+  const model = oauth ? await oauth.resolveModel(config.model) : config.model;
+  const systemPrompt = oauth
+    ? oauth.identityFor(config.systemPrompt, config.model)
+    : config.systemPrompt;
+  const subagents = oauth
+    ? await Promise.all(
+        config.subagents.map(async (s) => ({
+          ...s,
+          model: await oauth.resolveModel(s.model),
+          systemPrompt: oauth.identityFor(s.systemPrompt, s.model),
+        })),
+      )
+    : config.subagents;
 
   const agent = dap.createDeepAgent({
-    model: config.model,
-    systemPrompt: config.systemPrompt,
-    subagents: config.subagents,
+    model,
+    systemPrompt,
+    subagents,
     skills: config.skills,
     memory: config.memory,
     backend,
