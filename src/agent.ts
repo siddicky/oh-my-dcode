@@ -445,10 +445,13 @@ async function buildGraderTools(
     );
     const servers: Record<string, unknown> = {};
     for (const s of descriptor.mcpServers) {
-      servers[s.name] =
-        s.transport === "http"
-          ? { transport: "http", url: s.url }
-          : { transport: "stdio", command: s.command, args: s.args ?? [], env: s.env };
+      if (s.transport === "http") {
+        if (!s.url) continue;
+        servers[s.name] = { transport: "http", url: s.url };
+      } else {
+        if (!s.command) continue;
+        servers[s.name] = { transport: "stdio", command: s.command, args: s.args ?? [], env: s.env };
+      }
     }
     // The subprocess-backed client stays alive for the process lifetime; for a
     // single-shot run its servers exit with the parent. A long-lived library
