@@ -366,11 +366,13 @@ async function loadDeepAgents(): Promise<DeepAgentsModule> {
 }
 
 /**
- * Load the LangChain retry middleware. These ship in the `langchain` package
- * that `deepagents` is built on, so they resolve whenever the SDK is installed.
+ * Load the LangChain retry middleware. `modelRetryMiddleware` and
+ * `toolRetryMiddleware` are named exports of the `langchain` package root (the
+ * package that `deepagents` is built on), so they resolve whenever the SDK is
+ * installed. (langchain 1.x does not expose a `langchain/middleware` subpath.)
  */
 async function loadMiddleware(): Promise<MiddlewareModule> {
-  const moduleName = "langchain/middleware";
+  const moduleName = "langchain";
   try {
     return (await import(moduleName)) as unknown as MiddlewareModule;
   } catch (err) {
@@ -378,7 +380,7 @@ async function loadMiddleware(): Promise<MiddlewareModule> {
       "oh-my-dcode's fault-tolerance middleware requires the 'langchain' " +
         "package (a peer of 'deepagents'). Install it, or disable retries with " +
         "`{ modelRetries: 0, toolRetries: 0 }`. " +
-        `Underlying error: ${(err as Error).message}`,
+        `Underlying error: ${String(err)}`,
     );
   }
 }
