@@ -52,6 +52,8 @@ Options:
                             (default: 3)
   --no-grader-tools         Grade from the transcript only — no shell/Playwright/
                             LSP verification tools for the rubric grader
+  --no-interpreter          Disable the code interpreter (the sandboxed eval tool
+                            + task() fan-out global); on by default
   --yolo                    Unattended run: grant all permissions (no approval
                             gating) and lift the recursion limit to ~unbounded.
                             A given --recursion-limit still wins.
@@ -63,6 +65,8 @@ Environment:
   OMD_RECURSION_LIMIT, OMD_MODEL_RETRIES, OMD_TOOL_RETRIES   (harness tuning)
   OMD_RUBRIC_MAX_ITERATIONS, OMD_RUBRIC_GRADER_TIER         (rubric self-eval)
   OMD_GRADER_TOOLS, OMD_GRADER_SHELL_TOOL                   (grader tools)
+  OMD_INTERPRETER, OMD_INTERPRETER_PTC                      (code interpreter)
+  OMD_INTERPRETER_TIMEOUT_MS, OMD_INTERPRETER_MAX_PTC_CALLS (interpreter caps)
   OMD_AUTH=oauth                                            (use a Claude login)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 
@@ -120,6 +124,7 @@ function optionsFromFlags(
     if (Number.isInteger(n) && n >= 0) options.rubricMaxIterations = n;
   }
   if (values["no-grader-tools"]) options.graderTools = false;
+  if (values["no-interpreter"]) options.interpreter = false;
   // --yolo: run fully unattended — grant all permissions (no approval gating)
   // and lift the recursion limit to effectively unbounded. An explicit
   // --recursion-limit still wins so it can be dialed back down.
@@ -178,7 +183,11 @@ function cmdConfig(options: OhMyDcodeOptions): void {
   console.log(`Skill dirs: ${config.skills.join(", ")}`);
   console.log(`Recursion limit: ${config.recursionLimit}`);
   const retries = config.middleware
-    .map((m) => (m.kind === "rubric" ? "" : `${m.kind}=${m.maxRetries}`))
+    .map((m) =>
+      m.kind === "model-retry" || m.kind === "tool-retry"
+        ? `${m.kind}=${m.maxRetries}`
+        : "",
+    )
     .filter(Boolean)
     .join(", ");
   console.log(`Fault tolerance: ${retries || "(disabled)"}`);
@@ -194,6 +203,23 @@ function cmdConfig(options: OhMyDcodeOptions): void {
     );
   } else {
     console.log("Rubric self-eval: (disabled)");
+  }
+  const interpreter = config.middleware.find((m) => m.kind === "interpreter");
+  if (interpreter && interpreter.kind === "interpreter") {
+    const caps = [
+      interpreter.executionTimeoutMs ? `timeout ${interpreter.executionTimeoutMs}ms` : "",
+      interpreter.maxPtcCalls === null
+        ? "ptc-calls unlimited"
+        : interpreter.maxPtcCalls
+          ? `ptc-calls ${interpreter.maxPtcCalls}`
+          : "",
+    ].filter(Boolean);
+    console.log(
+      `Interpreter: eval sandbox on, read-only ptc ${interpreter.ptc.join("+")}` +
+        (caps.length ? ` (${caps.join(", ")})` : ""),
+    );
+  } else {
+    console.log("Interpreter: (disabled)");
   }
   const gated = Object.entries(config.interruptOn)
     .filter(([, on]) => on)
@@ -295,6 +321,7 @@ async function main(argv: string[]): Promise<void> {
       rubric: { type: "string" },
       "rubric-iterations": { type: "string" },
       "no-grader-tools": { type: "boolean", default: false },
+      "no-interpreter": { type: "boolean", default: false },
       yolo: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "non-interactive": { type: "boolean", short: "n", default: false },

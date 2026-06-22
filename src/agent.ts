@@ -18,6 +18,7 @@ import type {
   AgentSpec,
   BackendDescriptor,
   DeepAgentConfig,
+  InterpreterMiddlewareDescriptor,
   InvokeConfig,
   InvokeInput,
   McpServerSpec,
@@ -66,6 +67,56 @@ export const DEFAULT_RUBRIC_MAX_ITERATIONS = 3;
 
 /** Default model tier for the rubric grader: cheap, high-volume scoring work. */
 export const DEFAULT_RUBRIC_GRADER_TIER: ModelTier = "haiku";
+
+/**
+ * The code interpreter is installed by default. It only adds a sandboxed `eval`
+ * tool (and the `task()` fan-out global); the supervisor decides whether to use
+ * it, so installing it has no cost until a workflow reaches for it.
+ */
+export const DEFAULT_INTERPRETER_ENABLED = true;
+
+/**
+ * Default programmatic-tool-calling (PTC) allowlist for the interpreter sandbox:
+ * the read-only filesystem tools. These let `eval` inspect the workspace
+ * (locate files, read excerpts, grep) without ever mutating it.
+ */
+export const DEFAULT_INTERPRETER_PTC: readonly string[] = [
+  "ls",
+  "read_file",
+  "glob",
+  "grep",
+];
+
+/**
+ * Tools that must never be exposed to the interpreter sandbox via PTC. The
+ * sandbox runs untrusted, model-authored JavaScript; granting it a mutating or
+ * shell tool would let that code write files or run commands directly, bypassing
+ * the supervisor and the read-only review lanes. Any tool here is stripped from
+ * a caller-supplied {@link OhMyDcodeOptions.interpreterPtc} at resolve time.
+ */
+export const FORBIDDEN_INTERPRETER_PTC: readonly string[] = [
+  "write_file",
+  "edit_file",
+  "execute",
+  "delete_file",
+];
+
+/**
+ * Sanitize a PTC allowlist: drop any forbidden (mutating/shell) tool and
+ * de-duplicate while preserving order. The result is always safe to hand to the
+ * interpreter sandbox — read-only by construction, regardless of caller input.
+ */
+export function sanitizePtc(ptc: readonly string[]): string[] {
+  const forbidden = new Set<string>(FORBIDDEN_INTERPRETER_PTC);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of ptc) {
+    if (forbidden.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
 
 /**
  * System prompt for the rubric grader sub-agent. Encodes the "never
@@ -209,6 +260,9 @@ export function resolveMiddlewareDescriptors(
   if (toolRetries != null && toolRetries > 0) {
     descriptors.push({ kind: "tool-retry", maxRetries: toolRetries });
   }
+  if (options.interpreter ?? DEFAULT_INTERPRETER_ENABLED) {
+    descriptors.push(buildInterpreterDescriptor(options));
+  }
   if (rubricMaxIterations != null && rubricMaxIterations > 0 && models) {
     const tier = options.rubricGraderTier ?? DEFAULT_RUBRIC_GRADER_TIER;
     const toolsOff = options.graderTools === false;
@@ -224,6 +278,38 @@ export function resolveMiddlewareDescriptors(
     });
   }
   return descriptors;
+}
+
+/**
+ * Build the interpreter middleware descriptor from options. The PTC allowlist is
+ * always sanitized to a read-only set; the numeric caps are included only when
+ * the caller supplied them, so an unconfigured interpreter falls through to the
+ * middleware's own conservative defaults (and the descriptor stays minimal and
+ * easy to assert on).
+ */
+export function buildInterpreterDescriptor(
+  options: OhMyDcodeOptions = {},
+): InterpreterMiddlewareDescriptor {
+  const descriptor: InterpreterMiddlewareDescriptor = {
+    kind: "interpreter",
+    ptc: sanitizePtc(options.interpreterPtc ?? DEFAULT_INTERPRETER_PTC),
+    // The whole point of the interpreter here is programmatic fan-out, so the
+    // `task()` global is always on.
+    subagents: true,
+  };
+  if (options.interpreterMemoryLimitBytes !== undefined) {
+    descriptor.memoryLimitBytes = options.interpreterMemoryLimitBytes;
+  }
+  if (options.interpreterTimeoutMs !== undefined) {
+    descriptor.executionTimeoutMs = options.interpreterTimeoutMs;
+  }
+  if (options.interpreterMaxPtcCalls !== undefined) {
+    descriptor.maxPtcCalls = options.interpreterMaxPtcCalls;
+  }
+  if (options.interpreterMaxResultChars !== undefined) {
+    descriptor.maxResultChars = options.interpreterMaxResultChars;
+  }
+  return descriptor;
 }
 
 /**
@@ -349,6 +435,22 @@ interface MiddlewareModule {
   toolRetryMiddleware: (opts: { maxRetries?: number }) => unknown;
 }
 
+/** Minimal shape of the `@langchain/quickjs` code-interpreter factory. */
+interface InterpreterModule {
+  createCodeInterpreterMiddleware: (opts?: {
+    ptc?: string[];
+    memoryLimitBytes?: number;
+    maxStackSizeBytes?: number;
+    executionTimeoutMs?: number;
+    maxPtcCalls?: number | null;
+    maxResultChars?: number;
+    toolName?: string;
+    captureConsole?: boolean;
+    subagents?: boolean;
+    systemPrompt?: string | null;
+  }) => unknown;
+}
+
 /** Load the `deepagents` SDK, with a clear error if it is not installed. */
 async function loadDeepAgents(): Promise<DeepAgentsModule> {
   const moduleName = "deepagents";
@@ -380,6 +482,26 @@ async function loadMiddleware(): Promise<MiddlewareModule> {
       "oh-my-dcode's fault-tolerance middleware requires the 'langchain' " +
         "package (a peer of 'deepagents'). Install it, or disable retries with " +
         "`{ modelRetries: 0, toolRetries: 0 }`. " +
+        `Underlying error: ${String(err)}`,
+    );
+  }
+}
+
+/**
+ * Load the `@langchain/quickjs` code-interpreter package. It is a hard
+ * dependency of oh-my-dcode (the interpreter is on by default), but loaded
+ * lazily here at the runtime boundary so the SDK-free orchestration core stays
+ * importable and unit-testable without the WASM runtime present.
+ */
+async function loadInterpreter(): Promise<InterpreterModule> {
+  const moduleName = "@langchain/quickjs";
+  try {
+    return (await import(moduleName)) as unknown as InterpreterModule;
+  } catch (err) {
+    throw new Error(
+      "oh-my-dcode's code interpreter requires the '@langchain/quickjs' " +
+        "package. Install it, or disable the interpreter with " +
+        "`{ interpreter: false }` (or --no-interpreter). " +
         `Underlying error: ${String(err)}`,
     );
   }
@@ -529,6 +651,21 @@ async function instantiateMiddleware(
           systemPrompt,
           maxIterations: d.maxIterations,
           tools: tools.length > 0 ? tools : undefined,
+        }),
+      );
+    } else if (d.kind === "interpreter") {
+      const qjs = await loadInterpreter();
+      out.push(
+        qjs.createCodeInterpreterMiddleware({
+          ptc: d.ptc,
+          memoryLimitBytes: d.memoryLimitBytes,
+          maxStackSizeBytes: d.maxStackSizeBytes,
+          executionTimeoutMs: d.executionTimeoutMs,
+          maxPtcCalls: d.maxPtcCalls,
+          maxResultChars: d.maxResultChars,
+          toolName: d.toolName,
+          captureConsole: d.captureConsole,
+          subagents: d.subagents,
         }),
       );
     } else {

@@ -154,10 +154,13 @@ export interface DeepAgentConfig {
  *
  * - `model-retry` → `modelRetryMiddleware` (retries failed model calls)
  * - `tool-retry`  → `toolRetryMiddleware` (retries failed tool calls)
+ * - `interpreter` → `@langchain/quickjs`'s code-interpreter middleware (the
+ *   sandboxed `eval` tool + programmatic `task()` fan-out)
  * - `rubric`      → Deep Agents' `RubricMiddleware` (self-evaluating grader loop)
  */
 export type MiddlewareDescriptor =
   | RetryMiddlewareDescriptor
+  | InterpreterMiddlewareDescriptor
   | RubricMiddlewareDescriptor;
 
 /** A fault-tolerance retry middleware (model- or tool-call retries). */
@@ -165,6 +168,50 @@ export interface RetryMiddlewareDescriptor {
   kind: "model-retry" | "tool-retry";
   /** Retry attempts after the initial call (the SDK's `maxRetries` option). */
   maxRetries: number;
+}
+
+/**
+ * The `@langchain/quickjs` code-interpreter middleware: a sandboxed JavaScript
+ * `eval` tool backed by a QuickJS WASM runtime, plus a programmatic `task()`
+ * global for fan-out subagent dispatch. Lets a workflow keep plan/loop/batch
+ * state in JS and fan subagents out and in, returning only compact results to
+ * the supervisor while intermediate logs and failed branches stay out of the
+ * model context.
+ *
+ * The interpreter calls agent tools through a narrow read-only `ptc` allowlist.
+ * Mutating tools (`write_file`, `edit_file`, `execute`) are never exposed to the
+ * sandbox — {@link OhMyDcodeOptions.interpreterPtc} overrides are sanitized
+ * against a forbidden set at resolve time. The numeric fields cap the sandbox's
+ * resource use; when omitted, the middleware's own conservative defaults apply
+ * (64MB memory, 320KB stack, 5s timeout, 256 PTC calls, 4000 result chars).
+ */
+export interface InterpreterMiddlewareDescriptor {
+  kind: "interpreter";
+  /**
+   * Read-only tool names the sandbox may call through programmatic tool calling
+   * (PTC). Sanitized to exclude any mutating tool — see
+   * {@link OhMyDcodeOptions.interpreterPtc}.
+   */
+  ptc: string[];
+  /** Sandbox heap cap in bytes (the middleware default is 64MB). */
+  memoryLimitBytes?: number;
+  /** Sandbox stack cap in bytes (the middleware default is 320KB). */
+  maxStackSizeBytes?: number;
+  /** Per-`eval` wall-clock timeout in ms (the middleware default is 5000). */
+  executionTimeoutMs?: number;
+  /**
+   * Max `tools.*` bridge calls per `eval` (the middleware default is 256).
+   * `null` disables the limit entirely — unsafe, raises DoS risk.
+   */
+  maxPtcCalls?: number | null;
+  /** Max characters retained from a single `eval`'s result/console output. */
+  maxResultChars?: number;
+  /** Name of the tool exposed to the model (the middleware default is `eval`). */
+  toolName?: string;
+  /** Buffer and emit `console.*` output alongside the result (default true). */
+  captureConsole?: boolean;
+  /** Install the `task()` global for programmatic subagent fan-out (default true). */
+  subagents?: boolean;
 }
 
 /**
@@ -361,6 +408,34 @@ export interface OhMyDcodeOptions {
    * language-specific servers. Ignored when {@link graderTools} is `false`.
    */
   graderMcpServers?: McpServerSpec[];
+  /**
+   * Master switch for the code interpreter (the `@langchain/quickjs` sandboxed
+   * `eval` tool plus the programmatic `task()` fan-out global). Defaults to
+   * `true` — the interpreter is on by default so workflows can drive
+   * plan/loop/batch state in JS and fan subagents out and in without leaking
+   * intermediate context. Set to `false` to omit the middleware entirely (no
+   * `eval` tool; subagent dispatch goes through the normal `task` tool path).
+   */
+  interpreter?: boolean;
+  /**
+   * Read-only tool names the interpreter sandbox may call via programmatic tool
+   * calling (PTC). Defaults to `["ls", "read_file", "glob", "grep"]`. Any
+   * mutating tool (`write_file`, `edit_file`, `execute`, `delete_file`) is
+   * stripped at resolve time — the sandbox is read-only by construction, so a
+   * write must go back through the supervisor or a delegated execution agent.
+   */
+  interpreterPtc?: string[];
+  /** Interpreter sandbox heap cap in bytes. Defaults to the middleware's 64MB. */
+  interpreterMemoryLimitBytes?: number;
+  /** Interpreter per-`eval` timeout in ms. Defaults to the middleware's 5000. */
+  interpreterTimeoutMs?: number;
+  /**
+   * Max `tools.*` bridge calls per `eval`. Defaults to the middleware's 256.
+   * `null` disables the limit entirely (unsafe — raises DoS risk).
+   */
+  interpreterMaxPtcCalls?: number | null;
+  /** Max characters retained per `eval` result. Defaults to the middleware's 4000. */
+  interpreterMaxResultChars?: number;
   /**
    * Maximum agent-loop steps before LangGraph aborts the run. Defaults to a
    * value tuned for a delegating supervisor (LangGraph's own default of 25 is
