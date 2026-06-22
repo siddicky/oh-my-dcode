@@ -73,6 +73,27 @@ export interface AgentSpec {
   systemPrompt: string;
 }
 
+/** A filesystem operation a {@link FilesystemPermission} rule can govern. */
+export type FilesystemOperation = "read" | "write";
+
+/**
+ * A filesystem permission rule, mirroring the Deep Agents SDK shape. Rules are
+ * evaluated in declaration order; the first rule whose `operations` includes the
+ * requested operation AND whose `paths` glob-matches the target determines the
+ * outcome. If no rule matches, access is allowed (permissive default).
+ *
+ * `paths` must be absolute glob patterns rooted at `/` (no `..` or `~`), and
+ * support `**` (any depth), `*` (within one segment), and `{a,b}` braces.
+ */
+export interface FilesystemPermission {
+  /** The operations this rule applies to (`read` and/or `write`). */
+  operations: FilesystemOperation[];
+  /** Absolute glob patterns this rule matches (must start with `/`). */
+  paths: string[];
+  /** Whether matching paths are permitted or blocked. Defaults to `allow`. */
+  mode?: "allow" | "deny";
+}
+
 /**
  * A resolved subagent, ready to hand to the Deep Agents SDK. `model` is the
  * concrete `provider:model` string after routing has been applied.
@@ -82,6 +103,15 @@ export interface ResolvedSubagent {
   description: string;
   systemPrompt: string;
   model: string;
+  /**
+   * Filesystem permission rules for this subagent. Present only for read-only
+   * roster agents when read-only enforcement is enabled — a deny-write rule that
+   * stops the SDK from honoring any `write_file`/`edit_file` call the agent
+   * attempts, regardless of what its prompt says. A full replacement of the
+   * parent's permissions (the SDK does not merge), so omitting it inherits the
+   * supervisor's permissive default.
+   */
+  permissions?: FilesystemPermission[];
 }
 
 /**
@@ -408,6 +438,21 @@ export interface OhMyDcodeOptions {
    * language-specific servers. Ignored when {@link graderTools} is `false`.
    */
   graderMcpServers?: McpServerSpec[];
+  /**
+   * Enforce each read-only roster agent's read-only posture at the SDK level,
+   * not just in its prompt. Defaults to `true`: every agent whose spec is
+   * `readOnly` is given a deny-write filesystem permission rule, so the SDK
+   * rejects any `write_file`/`edit_file` it attempts. This keeps OMC's
+   * author/review separation honest — a review, planning, or research agent
+   * cannot mutate the workspace even if it tries. Set to `false` to fall back to
+   * prompt-only read-only discipline.
+   *
+   * Note: filesystem permissions do not cover the `execute` (shell) tool. On the
+   * shipped backends (state / filesystem / composite-filesystem) `execute` has
+   * no shell to run, so read-only is fully enforced; if you supply your own
+   * execution-capable (sandbox) backend, restrict `execute` separately.
+   */
+  enforceReadOnly?: boolean;
   /**
    * Master switch for the code interpreter (the `@langchain/quickjs` sandboxed
    * `eval` tool plus the programmatic `task()` fan-out global). Defaults to

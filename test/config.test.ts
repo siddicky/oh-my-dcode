@@ -91,6 +91,16 @@ test("parseFileConfig disables the rubric grader on null and drops bad tiers", (
   assert.equal(parseFileConfig({ rubricGraderTier: "ultra" }).rubricGraderTier, undefined);
 });
 
+test("parseFileConfig and parseEnvConfig read enforceReadOnly", () => {
+  assert.equal(parseFileConfig({ enforceReadOnly: false }).enforceReadOnly, false);
+  assert.equal(parseFileConfig({ enforceReadOnly: true }).enforceReadOnly, true);
+  assert.equal(parseFileConfig({}).enforceReadOnly, undefined);
+  assert.equal(
+    parseEnvConfig({ OMD_ENFORCE_READ_ONLY: "off" } as NodeJS.ProcessEnv).enforceReadOnly,
+    false,
+  );
+});
+
 test("parseFileConfig reads interpreter fields", () => {
   const parsed = parseFileConfig({
     interpreter: false,

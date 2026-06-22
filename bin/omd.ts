@@ -54,6 +54,8 @@ Options:
                             LSP verification tools for the rubric grader
   --no-interpreter          Disable the code interpreter (the sandboxed eval tool
                             + task() fan-out global); on by default
+  --no-enforce-read-only    Don't sandbox read-only agents at the SDK level
+                            (fall back to prompt-only read-only); on by default
   --yolo                    Unattended run: grant all permissions (no approval
                             gating) and lift the recursion limit to ~unbounded.
                             A given --recursion-limit still wins.
@@ -67,6 +69,7 @@ Environment:
   OMD_GRADER_TOOLS, OMD_GRADER_SHELL_TOOL                   (grader tools)
   OMD_INTERPRETER, OMD_INTERPRETER_PTC                      (code interpreter)
   OMD_INTERPRETER_TIMEOUT_MS, OMD_INTERPRETER_MAX_PTC_CALLS (interpreter caps)
+  OMD_ENFORCE_READ_ONLY                                     (read-only sandboxing)
   OMD_AUTH=oauth                                            (use a Claude login)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 
@@ -125,6 +128,7 @@ function optionsFromFlags(
   }
   if (values["no-grader-tools"]) options.graderTools = false;
   if (values["no-interpreter"]) options.interpreter = false;
+  if (values["no-enforce-read-only"]) options.enforceReadOnly = false;
   // --yolo: run fully unattended — grant all permissions (no approval gating)
   // and lift the recursion limit to effectively unbounded. An explicit
   // --recursion-limit still wins so it can be dialed back down.
@@ -221,6 +225,12 @@ function cmdConfig(options: OhMyDcodeOptions): void {
   } else {
     console.log("Interpreter: (disabled)");
   }
+  const sandboxed = config.subagents.filter((s) => s.permissions?.length).length;
+  console.log(
+    sandboxed > 0
+      ? `Read-only enforcement: on (${sandboxed} subagents denied writes at the SDK level)`
+      : "Read-only enforcement: off (prompt-only read-only discipline)",
+  );
   const gated = Object.entries(config.interruptOn)
     .filter(([, on]) => on)
     .map(([tool]) => tool);
@@ -322,6 +332,7 @@ async function main(argv: string[]): Promise<void> {
       "rubric-iterations": { type: "string" },
       "no-grader-tools": { type: "boolean", default: false },
       "no-interpreter": { type: "boolean", default: false },
+      "no-enforce-read-only": { type: "boolean", default: false },
       yolo: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "non-interactive": { type: "boolean", short: "n", default: false },

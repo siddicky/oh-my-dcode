@@ -101,6 +101,8 @@ export function parseFileConfig(raw: unknown): Partial<OhMyDcodeOptions> {
   if (typeof obj.graderTools === "boolean") out.graderTools = obj.graderTools;
   if (typeof obj.graderShellTool === "boolean") out.graderShellTool = obj.graderShellTool;
 
+  if (typeof obj.enforceReadOnly === "boolean") out.enforceReadOnly = obj.enforceReadOnly;
+
   const graderMcpServers = parseMcpServers(obj.graderMcpServers);
   if (graderMcpServers !== undefined) out.graderMcpServers = graderMcpServers;
 
@@ -183,6 +185,9 @@ export function parseEnvConfig(
 
   const graderShellTool = parseBoolean(env.OMD_GRADER_SHELL_TOOL);
   if (graderShellTool !== undefined) out.graderShellTool = graderShellTool;
+
+  const enforceReadOnly = parseBoolean(env.OMD_ENFORCE_READ_ONLY);
+  if (enforceReadOnly !== undefined) out.enforceReadOnly = enforceReadOnly;
 
   const interpreter = parseBoolean(env.OMD_INTERPRETER);
   if (interpreter !== undefined) out.interpreter = interpreter;

@@ -18,6 +18,7 @@ import type {
   AgentSpec,
   BackendDescriptor,
   DeepAgentConfig,
+  FilesystemPermission,
   InterpreterMiddlewareDescriptor,
   InvokeConfig,
   InvokeInput,
@@ -188,18 +189,46 @@ export function bundledSkillsDir(): string {
   return join(here, "..", "skills");
 }
 
-/** Resolve the roster to Deep Agents subagent specs with concrete models. */
+/** Read-only enforcement is on by default — author/review separation is a core
+ * OMC discipline, and the deny-write rule is harmless to agents that never write. */
+export const DEFAULT_ENFORCE_READ_ONLY = true;
+
+/**
+ * The permission rule that makes a subagent read-only at the SDK level: deny
+ * every write operation, on every path. Reads fall through to the permissive
+ * default. `/**` is safe on all shipped (non-sandbox) backends; an
+ * execution-capable backend would require rescoping to a route prefix.
+ *
+ * Returns a fresh array each call so callers never share a mutable reference.
+ */
+export function readOnlyPermissions(): FilesystemPermission[] {
+  return [{ operations: ["write"], paths: ["/**"], mode: "deny" }];
+}
+
+/**
+ * Resolve the roster to Deep Agents subagent specs with concrete models. When
+ * `enforceReadOnly` is set (the default), each read-only roster agent also gets
+ * a deny-write permission rule so the SDK — not just the prompt — keeps it from
+ * mutating the workspace.
+ */
 export function resolveSubagents(
   roster: readonly AgentSpec[],
   models: ModelMap,
   adversarialModel?: string | null,
+  enforceReadOnly: boolean = DEFAULT_ENFORCE_READ_ONLY,
 ): ResolvedSubagent[] {
-  return roster.map((agent) => ({
-    name: agent.name,
-    description: agent.description,
-    systemPrompt: agent.systemPrompt,
-    model: resolveAgentModel(agent, models, adversarialModel),
-  }));
+  return roster.map((agent) => {
+    const sub: ResolvedSubagent = {
+      name: agent.name,
+      description: agent.description,
+      systemPrompt: agent.systemPrompt,
+      model: resolveAgentModel(agent, models, adversarialModel),
+    };
+    if (enforceReadOnly && agent.readOnly) {
+      sub.permissions = readOnlyPermissions();
+    }
+    return sub;
+  });
 }
 
 /** Translate the high-level backend choice into a serializable descriptor. */
@@ -385,7 +414,12 @@ export function buildDeepAgentConfig(
     // The supervisor orchestrates — route it to the opus tier.
     model: models.opus,
     systemPrompt: buildSupervisorPrompt(roster, models, adversarialModel),
-    subagents: resolveSubagents(roster, models, adversarialModel),
+    subagents: resolveSubagents(
+      roster,
+      models,
+      adversarialModel,
+      options.enforceReadOnly ?? DEFAULT_ENFORCE_READ_ONLY,
+    ),
     skills,
     memory: options.memoryPaths ?? [],
     backend: resolveBackendDescriptor(options, workdir),

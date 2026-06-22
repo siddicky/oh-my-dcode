@@ -14,6 +14,8 @@ export type {
   AgentLane,
   AgentSpec,
   ResolvedSubagent,
+  FilesystemOperation,
+  FilesystemPermission,
   SkillSpec,
   DeepAgentConfig,
   BackendDescriptor,
@@ -70,6 +72,8 @@ export {
 export {
   bundledSkillsDir,
   resolveSubagents,
+  readOnlyPermissions,
+  DEFAULT_ENFORCE_READ_ONLY,
   resolveBackendDescriptor,
   resolveMiddlewareDescriptors,
   buildInterpreterDescriptor,

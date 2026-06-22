@@ -7,6 +7,7 @@ import {
   resolveMiddlewareDescriptors,
   buildInterpreterDescriptor,
   sanitizePtc,
+  readOnlyPermissions,
   applyInvokeDefaults,
   applyOauthAdversarialDefault,
   withClaudeCodeIdentity,
@@ -361,6 +362,45 @@ test("resolveSubagents maps tiers to models", () => {
   const subs = resolveSubagents(ROSTER, models);
   const writer = subs.find((s) => s.name === "writer");
   assert.equal(writer?.model, models.haiku); // writer is haiku-tier
+});
+
+// ---- SDK-level read-only enforcement ----------------------------------------
+
+test("resolveSubagents denies writes to read-only agents at the SDK level", () => {
+  const subs = resolveSubagents(ROSTER, resolveModelMap());
+  for (const agent of ROSTER) {
+    const sub = subs.find((s) => s.name === agent.name);
+    assert.ok(sub);
+    if (agent.readOnly) {
+      assert.deepEqual(sub.permissions, readOnlyPermissions());
+    } else {
+      // Authoring agents keep the permissive default (no own permissions).
+      assert.equal(sub.permissions, undefined);
+    }
+  }
+});
+
+test("readOnlyPermissions denies every write on every path, returning a fresh array", () => {
+  const a = readOnlyPermissions();
+  assert.deepEqual(a, [{ operations: ["write"], paths: ["/**"], mode: "deny" }]);
+  // No shared mutable reference across calls.
+  assert.notEqual(a, readOnlyPermissions());
+});
+
+test("enforceReadOnly:false drops the SDK-level deny-write rule entirely", () => {
+  const subs = resolveSubagents(ROSTER, resolveModelMap(), null, false);
+  for (const sub of subs) assert.equal(sub.permissions, undefined);
+  // And the same through the full builder.
+  const config = buildDeepAgentConfig({ enforceReadOnly: false });
+  for (const sub of config.subagents) assert.equal(sub.permissions, undefined);
+});
+
+test("buildDeepAgentConfig sandboxes only the read-only roster agents", () => {
+  const config = buildDeepAgentConfig();
+  const reviewer = config.subagents.find((s) => s.name === "code-reviewer");
+  const executor = config.subagents.find((s) => s.name === "executor");
+  assert.ok(reviewer?.permissions?.some((p) => p.mode === "deny"));
+  assert.equal(executor?.permissions, undefined);
 });
 
 // ---- OAuth wiring (the pure, offline pieces) --------------------------------
