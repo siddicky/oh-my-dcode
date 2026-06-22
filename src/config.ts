@@ -101,8 +101,37 @@ export function parseFileConfig(raw: unknown): Partial<OhMyDcodeOptions> {
   if (typeof obj.graderTools === "boolean") out.graderTools = obj.graderTools;
   if (typeof obj.graderShellTool === "boolean") out.graderShellTool = obj.graderShellTool;
 
+  if (typeof obj.enforceReadOnly === "boolean") out.enforceReadOnly = obj.enforceReadOnly;
+
   const graderMcpServers = parseMcpServers(obj.graderMcpServers);
   if (graderMcpServers !== undefined) out.graderMcpServers = graderMcpServers;
+
+  // Code interpreter: a master switch, a read-only PTC allowlist, and numeric
+  // sandbox caps. The allowlist is sanitized later (at descriptor build time),
+  // so a config that lists a mutating tool is accepted here but stripped there.
+  if (typeof obj.interpreter === "boolean") out.interpreter = obj.interpreter;
+
+  const interpreterPtc = parseStringArray(obj.interpreterPtc);
+  if (interpreterPtc) out.interpreterPtc = interpreterPtc;
+
+  const interpreterMemoryLimitBytes = parsePositiveInt(obj.interpreterMemoryLimitBytes);
+  if (interpreterMemoryLimitBytes !== undefined) {
+    out.interpreterMemoryLimitBytes = interpreterMemoryLimitBytes;
+  }
+
+  const interpreterTimeoutMs = parsePositiveInt(obj.interpreterTimeoutMs);
+  if (interpreterTimeoutMs !== undefined) out.interpreterTimeoutMs = interpreterTimeoutMs;
+
+  // maxPtcCalls: a positive integer, or null/disable token to lift the limit.
+  const interpreterMaxPtcCalls = parseMaxPtcCalls(obj.interpreterMaxPtcCalls);
+  if (interpreterMaxPtcCalls !== undefined) {
+    out.interpreterMaxPtcCalls = interpreterMaxPtcCalls;
+  }
+
+  const interpreterMaxResultChars = parsePositiveInt(obj.interpreterMaxResultChars);
+  if (interpreterMaxResultChars !== undefined) {
+    out.interpreterMaxResultChars = interpreterMaxResultChars;
+  }
 
   const skillDirs = parseStringArray(obj.skillDirs);
   if (skillDirs) out.skillDirs = skillDirs;
@@ -156,6 +185,28 @@ export function parseEnvConfig(
 
   const graderShellTool = parseBoolean(env.OMD_GRADER_SHELL_TOOL);
   if (graderShellTool !== undefined) out.graderShellTool = graderShellTool;
+
+  const enforceReadOnly = parseBoolean(env.OMD_ENFORCE_READ_ONLY);
+  if (enforceReadOnly !== undefined) out.enforceReadOnly = enforceReadOnly;
+
+  const interpreter = parseBoolean(env.OMD_INTERPRETER);
+  if (interpreter !== undefined) out.interpreter = interpreter;
+
+  // OMD_INTERPRETER_PTC: comma-separated read-only tool names.
+  if (typeof env.OMD_INTERPRETER_PTC === "string" && env.OMD_INTERPRETER_PTC.trim() !== "") {
+    const list = env.OMD_INTERPRETER_PTC.split(",")
+      .map((s) => s.trim())
+      .filter((s) => s !== "");
+    if (list.length > 0) out.interpreterPtc = list;
+  }
+
+  const interpreterTimeoutMs = parsePositiveInt(env.OMD_INTERPRETER_TIMEOUT_MS);
+  if (interpreterTimeoutMs !== undefined) out.interpreterTimeoutMs = interpreterTimeoutMs;
+
+  const interpreterMaxPtcCalls = parseMaxPtcCalls(env.OMD_INTERPRETER_MAX_PTC_CALLS);
+  if (interpreterMaxPtcCalls !== undefined) {
+    out.interpreterMaxPtcCalls = interpreterMaxPtcCalls;
+  }
 
   // Per-tier model overrides also surface here so `models` reflects them.
   const models: Partial<ModelMap> = {};
@@ -287,6 +338,27 @@ function parseRetries(value: unknown): number | null | undefined {
     if (DISABLE_TOKENS.has(raw.toLowerCase())) return null;
     const n = Number(raw);
     return Number.isInteger(n) && n >= 0 ? n : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Parse the interpreter's max-PTC-calls limit: a strictly positive integer
+ * enables that cap; an explicit `null`/`false` or a disable token lifts the
+ * limit (returns `null` — unsafe, but supported). Returns `undefined` when
+ * absent or invalid so the middleware default (256) stays in place. The
+ * middleware requires `>= 1`, so `0` is rejected rather than treated as disable.
+ */
+function parseMaxPtcCalls(value: unknown): number | null | undefined {
+  if (value === null || value === false) return null;
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value >= 1 ? value : undefined;
+  }
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (DISABLE_TOKENS.has(raw.toLowerCase())) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 1 ? n : undefined;
   }
   return undefined;
 }

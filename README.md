@@ -28,6 +28,34 @@ drop-in for the `dcode` CLI.
 
 ---
 
+## Highlights
+
+- **Dynamic, interpreter-driven workflows** — the fan-out workflows (`ultrawork`,
+  `team`, `ultragoal`) orchestrate through Deep Agents' **code interpreter**
+  (`@langchain/quickjs`): a sandboxed `eval` tool plus a `task()` fan-out global.
+  A workflow keeps its plan/batch/schedule state in JS, fans subagents out and
+  in, validates their typed results, and returns only a compact roll-up — so
+  intermediate logs and failed branches never enter the supervisor's context.
+  On by default; read-only by construction. See [Code interpreter](#code-interpreter).
+- **Claude Code OAuth** — authenticate Anthropic models with a **Claude Code /
+  Claude Pro/Max subscription** instead of an `ANTHROPIC_API_KEY`. If you're
+  already logged into the Claude Code CLI, `omd` **auto-discovers and reuses**
+  those credentials (env token → keychain/file) — no separate `omd auth login`
+  needed — and the whole roster runs on your subscription (adversarial reviewers
+  auto-route to Claude when no OpenAI key is present). See [Authentication](#authentication).
+- **SDK-level read-only enforcement** — review, planning, and research agents are
+  sandboxed with a deny-write filesystem rule, so the SDK rejects any write they
+  attempt — author/review separation that prompt discipline can't break. See
+  [Read-only enforcement](#read-only-enforcement).
+- **Tiered model routing** — haiku/sonnet/opus by task weight, with
+  premium/balanced/budget presets and per-tier overrides.
+- **Adversarial cross-model review** — critic and reviewers default to a
+  different model family for decorrelated critique.
+- **Rubric self-evaluation** — an optional grader loop that verifies pass/fail
+  criteria empirically (shell, Playwright, LSP) and iterates until they pass.
+
+---
+
 ## Why this exists
 
 The Deep Agents SDK gives you the *scaffolding* for a deep agent — planning,
@@ -38,7 +66,8 @@ a virtual filesystem, sub-agents, skills, memory. oh-my-dcode supplies the
 | ----------------------------------- | ---------------------------------------------------------------------- |
 | Specialized agents (≈19)            | A roster of Deep Agents sub-agents (`src/agents.ts`)                    |
 | haiku / sonnet / opus model routing | Tiered routing with premium/balanced/budget presets (`src/routing.ts`) |
-| Tier-0 workflows (autopilot, ralph, ultrawork, team, ralplan) | Deep Agents skills (`src/skills.ts` → `skills/*/SKILL.md`)              |
+| Tier-0 workflows (autopilot, ralph, ultrawork, team, ralplan) | Deep Agents skills (`src/skills.ts` → `skills/*/SKILL.md`); the fan-out ones run as **dynamic, interpreter-driven** workflows |
+| Claude subscription auth                                       | **Claude Code OAuth** — run Anthropic models on a Claude Pro/Max login (`src/auth.ts`) |
 | Author/review separation, "never self-approve" | Review/planning/research agents are **read-only**; verify-before-done gate baked into the supervisor prompt |
 | Multi-model cross-check (ccg)       | Adversarial agents (critic, reviewers) default to a **different model family** (`openai:gpt-5.5`) for decorrelated critique |
 | Delegation + verification discipline | Supervisor system prompt (`src/prompts.ts`)                            |
@@ -52,6 +81,9 @@ a virtual filesystem, sub-agents, skills, memory. oh-my-dcode supplies the
 npm install oh-my-dcode        # library + the `omd` CLI
 # the runtime SDK (peer): if not already present
 npm install deepagents
+# the code interpreter (on by default) — installed automatically as a dependency,
+# but listed here for clarity; loaded lazily so the core stays SDK-free
+npm install @langchain/quickjs
 ```
 
 Set a provider key for the model you route to (Anthropic by default):
@@ -77,27 +109,43 @@ Node's native type stripping — no build step needed to use them).
 Anthropic model calls authenticate one of two ways:
 
 - **API key** (default) — `ANTHROPIC_API_KEY`, as above.
-- **Claude Code subscription (OAuth)** — sign in with a Claude Code / Claude
-  Pro/Max subscription and use that token for all `anthropic:*` agents, no API
-  key required.
+- **Claude Code subscription (OAuth)** — use a Claude Code / Claude Pro/Max
+  subscription token for all `anthropic:*` agents, no API key required.
+
+**Already logged into the Claude Code CLI?** You don't need a separate login —
+`omd` discovers and reuses Claude Code's own credentials automatically. Just opt
+into OAuth and go:
 
 ```bash
 npm install @langchain/anthropic        # optional peer; only OAuth needs it
-omd auth login                          # browser (loopback) sign-in…
-omd auth login --no-browser             # …or paste the code (headless/remote)
-omd auth status                         # show login + token expiry
-omd auth logout                         # remove stored credentials
+unset ANTHROPIC_API_KEY                  # the API rejects an api key + bearer together
+OMD_AUTH=oauth omd run "add a /health endpoint and verify it"
+omd auth status                         # shows which credential source is in use
 ```
 
-`omd auth login` runs the OAuth (PKCE) flow, then stores the tokens in
-`~/.omd/credentials.json` (owner-only, `0600`); the access token is refreshed
-automatically before it expires. To use the login for a run, opt in with
-`auth: "oauth"` in `.omd/config.json`, `OMD_AUTH=oauth`, or `--auth oauth`.
+Discovery precedence (read-only — `omd` **never writes** Claude Code's stores):
+
+1. `CLAUDE_CODE_OAUTH_TOKEN` environment variable.
+2. The Claude Code CLI's primary store — the **macOS keychain**
+   (`Claude Code-credentials`) on macOS, or `~/.claude/.credentials.json`
+   (mode `0600`) on Linux/Windows — with the other as fallback.
+3. `omd`'s own store at `~/.omd/credentials.json`, written by `omd auth login`.
+
+When a discovered token is near expiry, `omd` refreshes it (via Claude Code's
+refresh token) and persists the result to **its own** `~/.omd/credentials.json`,
+leaving Claude Code's keychain/file untouched. Set `OMD_DISCOVER=off` to disable
+reuse and require an explicit `omd auth login`.
+
+**Need a separate/isolated token?** Run the OAuth (PKCE) flow yourself:
 
 ```bash
-unset ANTHROPIC_API_KEY                  # the API rejects both keys at once
-OMD_AUTH=oauth omd run "add a /health endpoint and verify it"
+omd auth login                          # browser (loopback) sign-in…
+omd auth login --no-browser             # …or paste the code (headless/remote)
+omd auth logout                         # remove omd's stored credentials
 ```
+
+To use OAuth for a run, opt in with `auth: "oauth"` in `.omd/config.json`,
+`OMD_AUTH=oauth`, or `--auth oauth`.
 
 Notes:
 - **Unset `ANTHROPIC_API_KEY`** when using OAuth — sending both an api key and a
@@ -109,6 +157,8 @@ Notes:
   `OPENAI_API_KEY` (or `--adversarial-model`) to keep cross-model review.
 - This uses the same OAuth client and Claude Code system-prompt identity that
   the inference endpoint requires — an interop requirement, not configurable.
+- The OAuth endpoints are overridable for forward-compat via `OMD_OAUTH_CLIENT_ID`,
+  `OMD_OAUTH_TOKEN_URL`, and `OMD_OAUTH_AUTHORIZE_URL`.
 
 ---
 
@@ -199,6 +249,8 @@ Flags: --routing <premium|balanced|budget>  --backend <composite|state|filesyste
        --rubric "<criteria>"  Self-evaluate against these pass/fail criteria, iterating to pass-or-cap
        --rubric-iterations <n>   Cap on rubric self-evaluation cycles (default 3; 0 disables)
        --no-grader-tools         Grade from the transcript only (no shell/Playwright/LSP tools)
+       --no-interpreter          Disable the code interpreter (eval tool + task() fan-out); on by default
+       --no-enforce-read-only    Don't sandbox read-only agents at the SDK level; on by default
        --yolo   Unattended: grant all permissions (no approval gating) + ~unbounded recursion
 ```
 
@@ -212,7 +264,10 @@ approval gating and lifts the recursion limit to effectively unbounded. A given
 
 18 specialized agents across five lanes. Review, planning, and research agents
 are **read-only** so the agent that writes code is never the one that approves
-it — OMC's author/review separation.
+it — OMC's author/review separation. Read-only is enforced at the **SDK level**,
+not just in prompts: each read-only agent carries a deny-write filesystem
+permission rule, so the SDK rejects any `write_file`/`edit_file` it attempts (see
+[Read-only enforcement](#read-only-enforcement)).
 
 | Lane          | Agents                                                        | Default tier |
 | ------------- | ------------------------------------------------------------- | ------------ |
@@ -234,14 +289,17 @@ built-in).
 Shipped as Deep Agents skills the supervisor can invoke. Each describes how to
 drive the roster for that mode — the five OMC Tier-0 workflows plus the
 gajae-code pipeline (`deep-interview` → `ralplan` → `ultragoal` → `team`,
-composed end-to-end by `deepship`):
+composed end-to-end by `deepship`). The fan-out workflows (`ultrawork`, `team`,
+and `ultragoal`'s independent goals) drive their batching from the
+[code interpreter](#code-interpreter) — keeping plan, schedule, and integration
+state in JS and returning only compact results to the supervisor:
 
 | Workflow    | What it does                                                                      |
 | ----------- | -------------------------------------------------------------------------------- |
 | `autopilot` | Idea → verified code: expand → design/plan → build → QA → review.                |
 | `ralph`     | Persistent verify/fix loop until an independent reviewer confirms the goal.      |
-| `ultrawork` | Maximum parallelism: decompose into conflict-free lanes and fan out.             |
-| `team`      | Staged pipeline (plan → spec → execute → verify → fix) on a shared task list.    |
+| `ultrawork` | Maximum parallelism: decompose into conflict-free lanes and fan out via the interpreter. |
+| `team`      | Staged pipeline (plan → spec → execute → verify → fix), scheduled wave-by-wave via the interpreter. |
 | `ralplan`   | Consensus planning gate: plan, adversarially critique, converge — then hand off. |
 | `deep-interview` | Socratic requirements gate: interview in rounds, lateral-review panel, crystallize a spec. |
 | `ultragoal` | Durable multi-goal execution: decompose into ordered goals, each closed when it satisfies its rubric via the self-evaluation grader loop. |
@@ -390,6 +448,55 @@ diagnostics over an **LSP** server — rather than trusting the transcript. The
 grader tools are loaded via [`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters);
 set `graderTools: false` for pure-LLM grading with no shell or MCP servers.
 
+### Code interpreter
+
+The harness installs [`@langchain/quickjs`](https://www.npmjs.com/package/@langchain/quickjs)'s
+**code interpreter** by default: a sandboxed JavaScript `eval` tool backed by a
+QuickJS WASM runtime, plus a programmatic `task()` global for fan-out subagent
+dispatch. This is what the fan-out workflows reach for — a workflow keeps its
+plan/loop/batch state in JS, fans subagents out and in, validates their typed
+results, and returns only a compact roll-up, so intermediate logs and failed
+branches never enter the supervisor's context.
+
+It is **read-only by construction**. The sandbox can only call agent tools
+through a narrow programmatic-tool-calling (PTC) allowlist that defaults to the
+read-only filesystem tools (`ls`, `read_file`, `glob`, `grep`). Mutating tools
+(`write_file`, `edit_file`, `execute`, `delete_file`) are **never** exposed — any
+allowlist you supply is sanitized against that forbidden set — so code in the
+sandbox can inspect the workspace but every write must go back through the
+supervisor or a delegated execution agent.
+
+```ts
+createOhMyDcode({
+  interpreter: true,            // master switch (default true; false omits the eval tool)
+  interpreterPtc: ["read_file", "glob", "grep"], // read-only allowlist (sanitized)
+  interpreterTimeoutMs: 5000,   // per-eval wall-clock cap (middleware default 5s)
+  interpreterMaxPtcCalls: 256,  // tools.* calls per eval (default 256; null lifts it — unsafe)
+  interpreterMemoryLimitBytes: 67108864, // sandbox heap cap (middleware default 64MB)
+});
+```
+
+`@langchain/quickjs` is a hard dependency but loaded lazily at the runtime
+boundary, so the SDK-free orchestration core stays importable without the WASM
+runtime present.
+
+### Read-only enforcement
+
+The read-only roster agents (research, planning, review) are sandboxed at the
+**SDK level** by default: each is given a deny-write filesystem permission rule
+(`{ operations: ["write"], paths: ["/**"], mode: "deny" }`), so the SDK rejects
+any `write_file`/`edit_file` the agent attempts — prompt discipline alone no
+longer has to hold the line. Authoring agents keep the permissive default.
+
+```ts
+createOhMyDcode({ enforceReadOnly: true }); // default; false → prompt-only read-only
+```
+
+Filesystem permissions don't cover the `execute` (shell) tool, but on the shipped
+backends (`state` / `filesystem` / `composite`) `execute` has no shell to run, so
+read-only is fully enforced. If you supply your own execution-capable (sandbox)
+backend, restrict `execute` separately.
+
 ---
 
 ## Configuration
@@ -410,6 +517,9 @@ Drop a `.omd/config.json` in your project (env vars override it):
   "rubricGraderTier": "haiku",
   "graderTools": true,
   "graderShellTool": true,
+  "interpreter": true,
+  "interpreterPtc": ["ls", "read_file", "glob", "grep"],
+  "enforceReadOnly": true,
   "skillDirs": ["./my-skills"],
   "memoryPaths": ["./AGENTS.md"]
 }
@@ -418,7 +528,9 @@ Drop a `.omd/config.json` in your project (env vars override it):
 Env overrides: `OMD_AUTH` (`oauth`/`api-key`), `OMD_RECURSION_LIMIT`,
 `OMD_MODEL_RETRIES`, `OMD_TOOL_RETRIES` (`0`/`none` disables a retry layer),
 `OMD_RUBRIC_MAX_ITERATIONS`, `OMD_RUBRIC_GRADER_TIER`, `OMD_GRADER_TOOLS`,
-`OMD_GRADER_SHELL_TOOL`.
+`OMD_GRADER_SHELL_TOOL`, `OMD_INTERPRETER`, `OMD_INTERPRETER_PTC` (comma-separated),
+`OMD_INTERPRETER_TIMEOUT_MS`, `OMD_INTERPRETER_MAX_PTC_CALLS`,
+`OMD_ENFORCE_READ_ONLY`.
 
 ---
 

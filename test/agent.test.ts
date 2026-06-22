@@ -5,6 +5,9 @@ import {
   resolveSubagents,
   resolveBackendDescriptor,
   resolveMiddlewareDescriptors,
+  buildInterpreterDescriptor,
+  sanitizePtc,
+  readOnlyPermissions,
   applyInvokeDefaults,
   applyOauthAdversarialDefault,
   withClaudeCodeIdentity,
@@ -14,6 +17,8 @@ import {
   DEFAULT_TOOL_RETRIES,
   DEFAULT_RUBRIC_MAX_ITERATIONS,
   DEFAULT_GRADER_MCP_SERVERS,
+  DEFAULT_INTERPRETER_PTC,
+  FORBIDDEN_INTERPRETER_PTC,
   RUBRIC_GRADER_SYSTEM_PROMPT,
   DEFAULT_RECURSION_LIMIT,
 } from "../src/agent.ts";
@@ -32,6 +37,16 @@ function defaultRubricDescriptor(
     maxIterations: DEFAULT_RUBRIC_MAX_ITERATIONS,
     mcpServers: DEFAULT_GRADER_MCP_SERVERS,
     shellTool: true,
+    ...overrides,
+  };
+}
+
+/** The interpreter descriptor `buildDeepAgentConfig` emits by default. */
+function defaultInterpreterDescriptor(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: "interpreter",
+    ptc: [...DEFAULT_INTERPRETER_PTC],
+    subagents: true,
     ...overrides,
   };
 }
@@ -140,6 +155,7 @@ test("default config installs model-retry and the rubric grader (tool retries op
   // The rubric grader is installed by default (dormant until a rubric is passed).
   assert.deepEqual(config.middleware, [
     { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
+    defaultInterpreterDescriptor(),
     defaultRubricDescriptor(),
   ]);
   assert.equal(config.recursionLimit, DEFAULT_RECURSION_LIMIT);
@@ -149,41 +165,54 @@ test("default config installs model-retry and the rubric grader (tool retries op
 
 test("retry counts are configurable; tool retries are opt-in", () => {
   const models = resolveModelMap();
-  // Model retries default on, tool retries default off; rubric default on.
+  // Model retries default on, tool retries default off; interpreter + rubric on.
   assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 5 }, models), [
     { kind: "model-retry", maxRetries: 5 },
+    defaultInterpreterDescriptor(),
     defaultRubricDescriptor(models),
   ]);
   // Opting tool retries in adds the second layer.
   assert.deepEqual(resolveMiddlewareDescriptors({ toolRetries: 3 }, models), [
     { kind: "model-retry", maxRetries: DEFAULT_MODEL_RETRIES },
     { kind: "tool-retry", maxRetries: 3 },
+    defaultInterpreterDescriptor(),
     defaultRubricDescriptor(models),
   ]);
-  // 0/null disables the model layer too (rubric still present).
+  // 0/null disables the model layer too (interpreter + rubric still present).
   assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 0 }, models), [
+    defaultInterpreterDescriptor(),
     defaultRubricDescriptor(models),
   ]);
   assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: null }, models), [
+    defaultInterpreterDescriptor(),
     defaultRubricDescriptor(models),
   ]);
 });
 
 test("the rubric grader is omitted when no model map is supplied", () => {
   // The descriptor needs a concrete grader model, so a bare call emits none.
+  // The interpreter is model-agnostic, so it is still emitted.
   assert.deepEqual(resolveMiddlewareDescriptors({ modelRetries: 1 }), [
     { kind: "model-retry", maxRetries: 1 },
+    defaultInterpreterDescriptor(),
   ]);
 });
 
 test("rubricMaxIterations 0/null disables the rubric grader entirely", () => {
   const models = resolveModelMap();
+  // The interpreter is independent of the rubric, so it stays.
   assert.deepEqual(
-    resolveMiddlewareDescriptors({ modelRetries: 0, rubricMaxIterations: 0 }, models),
+    resolveMiddlewareDescriptors(
+      { modelRetries: 0, rubricMaxIterations: 0, interpreter: false },
+      models,
+    ),
     [],
   );
   assert.deepEqual(
-    resolveMiddlewareDescriptors({ modelRetries: 0, rubricMaxIterations: null }, models),
+    resolveMiddlewareDescriptors(
+      { modelRetries: 0, rubricMaxIterations: null, interpreter: false },
+      models,
+    ),
     [],
   );
   assert.ok(
@@ -230,6 +259,69 @@ test("graderShellTool and graderMcpServers are configurable", () => {
   assert.deepEqual(rubric.mcpServers, servers);
 });
 
+// ---- code interpreter -------------------------------------------------------
+
+test("the interpreter is installed by default with a read-only PTC allowlist", () => {
+  const interp = buildDeepAgentConfig().middleware.find(
+    (m) => m.kind === "interpreter",
+  );
+  assert.ok(interp?.kind === "interpreter");
+  assert.deepEqual(interp.ptc, [...DEFAULT_INTERPRETER_PTC]);
+  assert.equal(interp.subagents, true);
+  // No mutating tool may ever appear in the default allowlist.
+  for (const forbidden of FORBIDDEN_INTERPRETER_PTC) {
+    assert.ok(!interp.ptc.includes(forbidden));
+  }
+});
+
+test("interpreter:false omits the interpreter middleware entirely", () => {
+  const config = buildDeepAgentConfig({ interpreter: false });
+  assert.ok(!config.middleware.some((m) => m.kind === "interpreter"));
+});
+
+test("sanitizePtc strips forbidden tools and de-duplicates, preserving order", () => {
+  assert.deepEqual(
+    sanitizePtc(["read_file", "write_file", "grep", "read_file", "execute", "ls"]),
+    ["read_file", "grep", "ls"],
+  );
+  // Forbidden tools never survive, even if the caller insists.
+  assert.deepEqual(sanitizePtc([...FORBIDDEN_INTERPRETER_PTC]), []);
+});
+
+test("interpreterPtc override is honored but sanitized of mutating tools", () => {
+  const interp = buildDeepAgentConfig({
+    interpreterPtc: ["read_file", "edit_file", "grep"],
+  }).middleware.find((m) => m.kind === "interpreter");
+  assert.ok(interp?.kind === "interpreter");
+  // edit_file is dropped; the rest survive in order.
+  assert.deepEqual(interp.ptc, ["read_file", "grep"]);
+});
+
+test("interpreter numeric caps are included only when explicitly set", () => {
+  // Unset: the descriptor stays minimal so the middleware defaults apply.
+  const bare = buildInterpreterDescriptor();
+  assert.equal("memoryLimitBytes" in bare, false);
+  assert.equal("executionTimeoutMs" in bare, false);
+  assert.equal("maxPtcCalls" in bare, false);
+  assert.equal("maxResultChars" in bare, false);
+  // Set: each cap flows through.
+  const tuned = buildInterpreterDescriptor({
+    interpreterMemoryLimitBytes: 1024,
+    interpreterTimeoutMs: 2500,
+    interpreterMaxPtcCalls: 16,
+    interpreterMaxResultChars: 8000,
+  });
+  assert.equal(tuned.memoryLimitBytes, 1024);
+  assert.equal(tuned.executionTimeoutMs, 2500);
+  assert.equal(tuned.maxPtcCalls, 16);
+  assert.equal(tuned.maxResultChars, 8000);
+});
+
+test("interpreterMaxPtcCalls: null lifts the per-eval PTC budget", () => {
+  const tuned = buildInterpreterDescriptor({ interpreterMaxPtcCalls: null });
+  assert.equal(tuned.maxPtcCalls, null);
+});
+
 test("recursionLimit option flows into the config", () => {
   assert.equal(buildDeepAgentConfig({ recursionLimit: 250 }).recursionLimit, 250);
 });
@@ -270,6 +362,45 @@ test("resolveSubagents maps tiers to models", () => {
   const subs = resolveSubagents(ROSTER, models);
   const writer = subs.find((s) => s.name === "writer");
   assert.equal(writer?.model, models.haiku); // writer is haiku-tier
+});
+
+// ---- SDK-level read-only enforcement ----------------------------------------
+
+test("resolveSubagents denies writes to read-only agents at the SDK level", () => {
+  const subs = resolveSubagents(ROSTER, resolveModelMap());
+  for (const agent of ROSTER) {
+    const sub = subs.find((s) => s.name === agent.name);
+    assert.ok(sub);
+    if (agent.readOnly) {
+      assert.deepEqual(sub.permissions, readOnlyPermissions());
+    } else {
+      // Authoring agents keep the permissive default (no own permissions).
+      assert.equal(sub.permissions, undefined);
+    }
+  }
+});
+
+test("readOnlyPermissions denies every write on every path, returning a fresh array", () => {
+  const a = readOnlyPermissions();
+  assert.deepEqual(a, [{ operations: ["write"], paths: ["/**"], mode: "deny" }]);
+  // No shared mutable reference across calls.
+  assert.notEqual(a, readOnlyPermissions());
+});
+
+test("enforceReadOnly:false drops the SDK-level deny-write rule entirely", () => {
+  const subs = resolveSubagents(ROSTER, resolveModelMap(), null, false);
+  for (const sub of subs) assert.equal(sub.permissions, undefined);
+  // And the same through the full builder.
+  const config = buildDeepAgentConfig({ enforceReadOnly: false });
+  for (const sub of config.subagents) assert.equal(sub.permissions, undefined);
+});
+
+test("buildDeepAgentConfig sandboxes only the read-only roster agents", () => {
+  const config = buildDeepAgentConfig();
+  const reviewer = config.subagents.find((s) => s.name === "code-reviewer");
+  const executor = config.subagents.find((s) => s.name === "executor");
+  assert.ok(reviewer?.permissions?.some((p) => p.mode === "deny"));
+  assert.equal(executor?.permissions, undefined);
 });
 
 // ---- OAuth wiring (the pure, offline pieces) --------------------------------

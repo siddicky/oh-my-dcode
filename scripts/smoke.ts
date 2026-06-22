@@ -29,7 +29,11 @@ console.log(`Subagents        : ${config.subagents.length}`);
 console.log(`Backend          : ${config.backend.kind} (root ${config.backend.rootDir})`);
 console.log(`Skill dirs       : ${config.skills.length}`);
 console.log(`Recursion limit  : ${config.recursionLimit}`);
-console.log(`Middleware       : ${config.middleware.map((m) => m.kind === "rubric" ? `rubric=${m.maxIterations}` : `${m.kind}=${m.maxRetries}`).join(", ")}\n`);
+console.log(`Middleware       : ${config.middleware.map((m) => {
+  if (m.kind === "rubric") return `rubric=${m.maxIterations}`;
+  if (m.kind === "interpreter") return `interpreter[ptc=${m.ptc.join("+")}]`;
+  return `${m.kind}=${m.maxRetries}`;
+}).join(", ")}\n`);
 
 console.log("Roster:");
 for (const a of ROSTER) {
@@ -47,7 +51,8 @@ check("every subagent has a provider:model", config.subagents.every((s) => s.mod
 check("eight workflows present", SKILLS.length === 8);
 check("scaffold covers roster + skills + AGENTS.md", scaffold.length === ROSTER.length + SKILLS.length + 1);
 check("budget routing differs from balanced for opus tier", resolveModelMap({ routing: "budget" }).opus !== models.opus);
-check("default harness installs model-retry + rubric middleware (tool retries opt-in)", config.middleware.length === 2 && config.middleware[0]?.kind === "model-retry" && config.middleware[1]?.kind === "rubric");
+check("default harness installs model-retry + interpreter + rubric (tool retries opt-in)", config.middleware.length === 3 && config.middleware[0]?.kind === "model-retry" && config.middleware[1]?.kind === "interpreter" && config.middleware[2]?.kind === "rubric");
+check("interpreter PTC allowlist is read-only", (() => { const i = config.middleware.find((m) => m.kind === "interpreter"); return i?.kind === "interpreter" && !["write_file", "edit_file", "execute", "delete_file"].some((t) => i.ptc.includes(t)); })());
 check("default recursion limit is set", config.recursionLimit > 25);
 
 console.log(`\n${failures === 0 ? "ALL GOOD" : failures + " CHECK(S) FAILED"}`);

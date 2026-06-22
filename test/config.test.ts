@@ -91,6 +91,55 @@ test("parseFileConfig disables the rubric grader on null and drops bad tiers", (
   assert.equal(parseFileConfig({ rubricGraderTier: "ultra" }).rubricGraderTier, undefined);
 });
 
+test("parseFileConfig and parseEnvConfig read enforceReadOnly", () => {
+  assert.equal(parseFileConfig({ enforceReadOnly: false }).enforceReadOnly, false);
+  assert.equal(parseFileConfig({ enforceReadOnly: true }).enforceReadOnly, true);
+  assert.equal(parseFileConfig({}).enforceReadOnly, undefined);
+  assert.equal(
+    parseEnvConfig({ OMD_ENFORCE_READ_ONLY: "off" } as NodeJS.ProcessEnv).enforceReadOnly,
+    false,
+  );
+});
+
+test("parseFileConfig reads interpreter fields", () => {
+  const parsed = parseFileConfig({
+    interpreter: false,
+    interpreterPtc: ["read_file", "grep", ""],
+    interpreterMemoryLimitBytes: 2048,
+    interpreterTimeoutMs: 3000,
+    interpreterMaxPtcCalls: 32,
+    interpreterMaxResultChars: 6000,
+  });
+  assert.equal(parsed.interpreter, false);
+  // Empty entries are dropped; sanitization of mutating tools happens later.
+  assert.deepEqual(parsed.interpreterPtc, ["read_file", "grep"]);
+  assert.equal(parsed.interpreterMemoryLimitBytes, 2048);
+  assert.equal(parsed.interpreterTimeoutMs, 3000);
+  assert.equal(parsed.interpreterMaxPtcCalls, 32);
+  assert.equal(parsed.interpreterMaxResultChars, 6000);
+});
+
+test("parseFileConfig handles the interpreter PTC-call limit edges", () => {
+  // null/disable lifts the cap; 0 is invalid (the middleware needs >= 1).
+  assert.equal(parseFileConfig({ interpreterMaxPtcCalls: null }).interpreterMaxPtcCalls, null);
+  assert.equal(parseFileConfig({ interpreterMaxPtcCalls: "off" }).interpreterMaxPtcCalls, null);
+  assert.equal(parseFileConfig({ interpreterMaxPtcCalls: 0 }).interpreterMaxPtcCalls, undefined);
+});
+
+test("parseEnvConfig reads interpreter vars", () => {
+  const env = {
+    OMD_INTERPRETER: "off",
+    OMD_INTERPRETER_PTC: "read_file, grep , ls",
+    OMD_INTERPRETER_TIMEOUT_MS: "4500",
+    OMD_INTERPRETER_MAX_PTC_CALLS: "64",
+  } as NodeJS.ProcessEnv;
+  const parsed = parseEnvConfig(env);
+  assert.equal(parsed.interpreter, false);
+  assert.deepEqual(parsed.interpreterPtc, ["read_file", "grep", "ls"]);
+  assert.equal(parsed.interpreterTimeoutMs, 4500);
+  assert.equal(parsed.interpreterMaxPtcCalls, 64);
+});
+
 test("parseEnvConfig reads rubric self-evaluation vars", () => {
   const env = {
     OMD_RUBRIC_MAX_ITERATIONS: "4",

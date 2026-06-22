@@ -52,6 +52,10 @@ Options:
                             (default: 3)
   --no-grader-tools         Grade from the transcript only — no shell/Playwright/
                             LSP verification tools for the rubric grader
+  --no-interpreter          Disable the code interpreter (the sandboxed eval tool
+                            + task() fan-out global); on by default
+  --no-enforce-read-only    Don't sandbox read-only agents at the SDK level
+                            (fall back to prompt-only read-only); on by default
   --yolo                    Unattended run: grant all permissions (no approval
                             gating) and lift the recursion limit to ~unbounded.
                             A given --recursion-limit still wins.
@@ -63,13 +67,23 @@ Environment:
   OMD_RECURSION_LIMIT, OMD_MODEL_RETRIES, OMD_TOOL_RETRIES   (harness tuning)
   OMD_RUBRIC_MAX_ITERATIONS, OMD_RUBRIC_GRADER_TIER         (rubric self-eval)
   OMD_GRADER_TOOLS, OMD_GRADER_SHELL_TOOL                   (grader tools)
+  OMD_INTERPRETER, OMD_INTERPRETER_PTC                      (code interpreter)
+  OMD_INTERPRETER_TIMEOUT_MS, OMD_INTERPRETER_MAX_PTC_CALLS (interpreter caps)
+  OMD_ENFORCE_READ_ONLY                                     (read-only sandboxing)
   OMD_AUTH=oauth                                            (use a Claude login)
+  OMD_DISCOVER=off                          (don't reuse the Claude Code CLI login)
+  OMD_OAUTH_CLIENT_ID, OMD_OAUTH_TOKEN_URL, OMD_OAUTH_AUTHORIZE_URL (endpoint overrides)
+  CLAUDE_CODE_OAUTH_TOKEN                    (a Claude Code access token, auto-detected)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 
 Authentication:
   By default Anthropic models use ANTHROPIC_API_KEY. To use a Claude Code /
-  Claude Pro/Max subscription instead, run \`omd auth login\`, then set
-  auth: "oauth" in .omd/config.json (or OMD_AUTH=oauth, or --auth oauth). Unset
+  Claude Pro/Max subscription instead, set auth: "oauth" in .omd/config.json (or
+  OMD_AUTH=oauth, or --auth oauth). If you're already logged into the Claude Code
+  CLI, omd reuses those credentials automatically (CLAUDE_CODE_OAUTH_TOKEN, then
+  ~/.claude/.credentials.json, then the macOS keychain) — no separate login
+  needed; run \`omd auth login\` only for an isolated token. omd never writes the
+  Claude Code stores; set OMD_DISCOVER=off to disable reuse. Unset
   ANTHROPIC_API_KEY when using OAuth. With no OPENAI_API_KEY, the adversarial
   reviewers auto-route to Claude. OAuth requires \`npm install @langchain/anthropic\`.
 `;
@@ -120,6 +134,8 @@ function optionsFromFlags(
     if (Number.isInteger(n) && n >= 0) options.rubricMaxIterations = n;
   }
   if (values["no-grader-tools"]) options.graderTools = false;
+  if (values["no-interpreter"]) options.interpreter = false;
+  if (values["no-enforce-read-only"]) options.enforceReadOnly = false;
   // --yolo: run fully unattended — grant all permissions (no approval gating)
   // and lift the recursion limit to effectively unbounded. An explicit
   // --recursion-limit still wins so it can be dialed back down.
@@ -178,7 +194,11 @@ function cmdConfig(options: OhMyDcodeOptions): void {
   console.log(`Skill dirs: ${config.skills.join(", ")}`);
   console.log(`Recursion limit: ${config.recursionLimit}`);
   const retries = config.middleware
-    .map((m) => (m.kind === "rubric" ? "" : `${m.kind}=${m.maxRetries}`))
+    .map((m) =>
+      m.kind === "model-retry" || m.kind === "tool-retry"
+        ? `${m.kind}=${m.maxRetries}`
+        : "",
+    )
     .filter(Boolean)
     .join(", ");
   console.log(`Fault tolerance: ${retries || "(disabled)"}`);
@@ -195,6 +215,29 @@ function cmdConfig(options: OhMyDcodeOptions): void {
   } else {
     console.log("Rubric self-eval: (disabled)");
   }
+  const interpreter = config.middleware.find((m) => m.kind === "interpreter");
+  if (interpreter && interpreter.kind === "interpreter") {
+    const caps = [
+      interpreter.executionTimeoutMs ? `timeout ${interpreter.executionTimeoutMs}ms` : "",
+      interpreter.maxPtcCalls === null
+        ? "ptc-calls unlimited"
+        : interpreter.maxPtcCalls
+          ? `ptc-calls ${interpreter.maxPtcCalls}`
+          : "",
+    ].filter(Boolean);
+    console.log(
+      `Interpreter: eval sandbox on, read-only ptc ${interpreter.ptc.join("+")}` +
+        (caps.length ? ` (${caps.join(", ")})` : ""),
+    );
+  } else {
+    console.log("Interpreter: (disabled)");
+  }
+  const sandboxed = config.subagents.filter((s) => s.permissions?.length).length;
+  console.log(
+    sandboxed > 0
+      ? `Read-only enforcement: on (${sandboxed} subagents denied writes at the SDK level)`
+      : "Read-only enforcement: off (prompt-only read-only discipline)",
+  );
   const gated = Object.entries(config.interruptOn)
     .filter(([, on]) => on)
     .map(([tool]) => tool);
@@ -212,6 +255,21 @@ function cmdInit(options: OhMyDcodeOptions, cwd: string, force: boolean): void {
   console.log("Run the Deep Agents Code CLI (dcode) in this directory to use them.");
 }
 
+/** Human-readable label for where the active credentials were found. */
+function describeSource(source: string | undefined): string {
+  switch (source) {
+    case "claude-code-env":
+      return "via CLAUDE_CODE_OAUTH_TOKEN";
+    case "claude-code-file":
+      return "via the Claude Code CLI's ~/.claude/.credentials.json";
+    case "claude-code-keychain":
+      return "via the Claude Code CLI's macOS keychain";
+    case "omd":
+    default:
+      return "via omd login";
+  }
+}
+
 async function cmdAuth(rest: string[], noBrowser: boolean): Promise<void> {
   const sub = rest[0];
   // Built-in-only module: keeps `auth` zero-dependency like inspect/scaffold.
@@ -225,23 +283,39 @@ async function cmdAuth(rest: string[], noBrowser: boolean): Promise<void> {
       console.log(
         'Set auth: "oauth" in .omd/config.json (or OMD_AUTH=oauth) to use it.',
       );
+      console.log(
+        "Tip: if you're already logged into the Claude Code CLI, this is " +
+          "optional — omd reuses those credentials automatically.",
+      );
       return;
     }
     case "logout": {
       await auth.logout();
-      console.log("Logged out (credentials removed).");
+      console.log("Logged out (omd credentials removed).");
+      console.log(
+        "Note: this does not touch the Claude Code CLI's own login; set " +
+          "OMD_DISCOVER=off if you don't want omd to reuse it.",
+      );
       return;
     }
     case "status": {
       const s = await auth.status();
       if (!s.loggedIn) {
-        console.log("Not logged in. Run `omd auth login` to sign in.");
+        console.log(
+          "Not logged in. Run `omd auth login`, or log into the Claude Code " +
+            "CLI (omd reuses its credentials automatically).",
+        );
         return;
       }
-      const when = s.expiresAt ? new Date(s.expiresAt).toISOString() : "unknown";
-      console.log(`Logged in.`);
-      console.log(`  Token ${s.expired ? "EXPIRED" : "valid"} (expires ${when})`);
+      console.log(`Logged in (${describeSource(s.source)}).`);
+      if (s.expiresAt) {
+        const when = new Date(s.expiresAt).toISOString();
+        console.log(`  Token ${s.expired ? "EXPIRED" : "valid"} (expires ${when})`);
+      }
       if (s.scope) console.log(`  Scope: ${s.scope}`);
+      if (s.source && s.source !== "omd") {
+        console.log("  Reusing the Claude Code CLI login — `omd auth login` not required.");
+      }
       return;
     }
     default:
@@ -295,6 +369,8 @@ async function main(argv: string[]): Promise<void> {
       rubric: { type: "string" },
       "rubric-iterations": { type: "string" },
       "no-grader-tools": { type: "boolean", default: false },
+      "no-interpreter": { type: "boolean", default: false },
+      "no-enforce-read-only": { type: "boolean", default: false },
       yolo: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "non-interactive": { type: "boolean", short: "n", default: false },

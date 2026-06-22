@@ -62,41 +62,131 @@ cannot resolve — and report that blocker plainly.`,
     description:
       "Maximum parallelism: decompose the goal into independent units and fan them out across agents at once.",
     triggers: ["ultrawork", "ulw", "in parallel", "all at once", "fan out"],
-    body: `Maximize throughput by parallelizing aggressively.
+    body: `Maximize throughput by parallelizing aggressively, driving the fan-out from the
+code interpreter (the \`eval\` tool) so plan, batching, and integration state live
+in JS — not in your context window.
 
-1. Decompose the goal into the largest set of mutually independent units of
-   work (files, modules, checks, tickets).
-2. Identify conflicts — units that touch the same files must not run
-   concurrently. Group the rest into conflict-free lanes.
-3. Dispatch each lane to a tier-appropriate agent in a single batch so they run
-   concurrently. Track them with \`write_todos\`.
-4. As results return, integrate them and resolve any merge conflicts.
-5. Once integrated, delegate to \`verifier\` for a single end-to-end check and
-   \`code-reviewer\` for the approval pass.
+1. DECOMPOSE — break the goal into the largest set of mutually independent units
+   of work (files, modules, checks, tickets).
+2. PARTITION — units that touch the same files must not run concurrently. Group
+   the rest into conflict-free lanes.
+3. FAN OUT — in a single \`eval\`, dispatch each lane with the \`task()\` global and
+   await the batch together. Keep batches to about 8 (the runtime caps
+   concurrency at 32). Give each \`task()\` a \`responseSchema\` so results arrive as
+   validated objects, and return only a compact roll-up — intermediate logs and
+   failed branches never enter your context.
+4. INTEGRATE — apply the returned changes and resolve any merge conflicts. Track
+   the lanes with \`write_todos\`.
+5. CLOSE — delegate to \`verifier\` for one end-to-end check and \`code-reviewer\`
+   for the approval pass.
 
-Prefer parallel \`task\` dispatches over sequential ones whenever the work is
-independent. Log anything you deliberately left out of scope.`,
+Inside \`eval\` the read-only PTC tools (\`tools.glob\`, \`tools.grep\`,
+\`tools.readFile\`, \`tools.ls\`) are available for inspection; mutating tools are
+not, so every write goes through \`executor\` via \`task()\`. The interpreter has no
+imports — inline any helpers you need:
+
+\`\`\`js
+const chunk = (xs, n) => xs.reduce((acc, x, i) => {
+  if (i % n === 0) acc.push([]);
+  acc[acc.length - 1].push(x);
+  return acc;
+}, []);
+const uniqueBy = (xs, key) => {
+  const seen = new Set();
+  return xs.filter((x) => (seen.has(key(x)) ? false : seen.add(key(x))));
+};
+
+const units = [ /* the conflict-free lanes decided above */ ];
+const results = [];
+for (const batch of chunk(units, 8)) {
+  const out = await Promise.all(batch.map((u) => task({
+    description: 'Implement ' + u.summary + ' in ' + u.files.join(', '),
+    subagentType: 'executor',
+    responseSchema: {
+      type: 'object',
+      properties: {
+        unit: { type: 'string' },
+        ok: { type: 'boolean' },
+        changed: { type: 'array', items: { type: 'string' } },
+        notes: { type: 'string' },
+      },
+      required: ['unit', 'ok'],
+    },
+  })));
+  results.push(...out);
+}
+// Hand back only the compact summary.
+uniqueBy(results, (r) => r.unit).map((r) => ({ unit: r.unit, ok: r.ok, changed: r.changed }));
+\`\`\`
+
+Prefer one \`eval\` that fans out over many sequential \`task\` calls. Log anything
+you deliberately left out of scope.`,
   },
   {
     name: "team",
     description:
       "Staged pipeline of coordinated agents: plan → spec → execute → verify → fix, on a shared task list.",
     triggers: ["team", "pipeline", "coordinate agents", "staged"],
-    body: `Run a coordinated multi-agent pipeline on a shared task list.
+    body: `Run a coordinated multi-agent pipeline on a shared task list, driving the
+dependency-aware execute/verify fan-out from the code interpreter (the \`eval\`
+tool) so the schedule and per-task state stay in JS rather than your context.
 
 1. PLAN — \`architect\` + \`planner\` produce the design and the milestone plan;
    \`critic\` validates it.
 2. SPEC — turn each milestone into a precise, self-contained task with a
-   pass-gate. Record them with \`write_todos\`.
-3. EXECUTE — assign tasks to execution agents (\`executor\`, \`debugger\`,
-   \`test-engineer\`, \`designer\`) by tier and lane. Run independent tasks in
-   parallel; respect declared dependencies.
-4. VERIFY — \`verifier\` checks each completed task against its gate.
-5. FIX — route failures back to execution, then re-verify. Close the loop with
-   \`code-reviewer\` (and \`security-reviewer\` for sensitive changes).
+   pass-gate and an explicit list of task ids it depends on. Record them with
+   \`write_todos\`; this is the authoritative ledger.
+3. EXECUTE & VERIFY — in \`eval\`, walk the dependency graph in waves: each wave is
+   the set of tasks whose dependencies are all done. Dispatch a wave with
+   \`task()\` to the right execution agent (\`executor\`, \`debugger\`,
+   \`test-engineer\`, \`designer\`), then dispatch \`verifier\` on each result against
+   its gate. Carry only \`{ id, ok }\` forward to schedule the next wave.
+4. FIX — route any failed task back to execution and re-verify it in the next
+   wave. Close the loop with \`code-reviewer\` (and \`security-reviewer\` for
+   sensitive changes).
+
+Use a \`responseSchema\` on every \`task()\` so results are validated objects, and
+return only the wave summary. Mutating tools are unavailable inside \`eval\`, so
+all writes happen through the dispatched agents:
+
+\`\`\`js
+const tasks = [ /* { id, summary, agent, gate, deps: [] } from the spec */ ];
+const done = new Set();
+const summary = [];
+const ready = () => tasks.filter((t) => !done.has(t.id) && t.deps.every((d) => done.has(d)));
+
+let wave;
+while ((wave = ready()).length > 0) {
+  const built = await Promise.all(wave.map((t) => task({
+    description: t.summary,
+    subagentType: t.agent,
+    responseSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' }, changed: { type: 'array', items: { type: 'string' } } },
+      required: ['id'],
+    },
+  })));
+  const checked = await Promise.all(wave.map((t) => task({
+    description: 'Verify task ' + t.id + ' against its gate: ' + t.gate,
+    subagentType: 'verifier',
+    responseSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' }, ok: { type: 'boolean' }, evidence: { type: 'string' } },
+      required: ['id', 'ok'],
+    },
+  })));
+  for (const c of checked) {
+    if (c.ok) done.add(c.id);
+    summary.push({ id: c.id, ok: c.ok });
+  }
+  // Stop scheduling if a wave made no progress (a failing/blocked task).
+  if (!checked.some((c) => c.ok)) break;
+}
+summary;
+\`\`\`
 
 Keep the task list authoritative: every unit of work is a tracked task with a
-clear owner lane and an explicit gate.`,
+clear owner lane, declared dependencies, and an explicit gate.`,
   },
   {
     name: "ralplan",
@@ -166,8 +256,11 @@ by the native rubric self-evaluation loop, not a manual review hand-off.
    (build, lint, and tests pass with shown output), what a \`code-reviewer\` would
    raise (no blockers or majors, scope honored), and any observable behavior
    (the page renders / endpoint responds, no new type or diagnostic errors).
-3. EXECUTE — drive one goal at a time. Assign each to the right execution agent
-   (\`executor\`, \`debugger\`, \`test-engineer\`, or \`designer\`) by tier and lane.
+3. EXECUTE — assign each goal to the right execution agent (\`executor\`,
+   \`debugger\`, \`test-engineer\`, or \`designer\`) by tier and lane. When goals are
+   independent, fan them out from the code interpreter in a single \`eval\` with
+   the \`task()\` global (batches of about 8), carrying only each goal's id and
+   status back; drive dependent goals one at a time.
 4. SELF-EVALUATE & ITERATE — close the goal by supplying its rubric as the run's
    \`rubric\`. The rubric grader scores every criterion — running the build/tests
    with its shell tool, driving the UI with Playwright, and querying diagnostics

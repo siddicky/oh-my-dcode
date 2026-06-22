@@ -14,11 +14,14 @@ export type {
   AgentLane,
   AgentSpec,
   ResolvedSubagent,
+  FilesystemOperation,
+  FilesystemPermission,
   SkillSpec,
   DeepAgentConfig,
   BackendDescriptor,
   MiddlewareDescriptor,
   RetryMiddlewareDescriptor,
+  InterpreterMiddlewareDescriptor,
   RubricMiddlewareDescriptor,
   McpServerSpec,
   InvokeConfig,
@@ -69,8 +72,12 @@ export {
 export {
   bundledSkillsDir,
   resolveSubagents,
+  readOnlyPermissions,
+  DEFAULT_ENFORCE_READ_ONLY,
   resolveBackendDescriptor,
   resolveMiddlewareDescriptors,
+  buildInterpreterDescriptor,
+  sanitizePtc,
   applyOauthAdversarialDefault,
   buildDeepAgentConfig,
   createOhMyDcode,
@@ -81,6 +88,9 @@ export {
   DEFAULT_RUBRIC_MAX_ITERATIONS,
   DEFAULT_RUBRIC_GRADER_TIER,
   DEFAULT_GRADER_MCP_SERVERS,
+  DEFAULT_INTERPRETER_ENABLED,
+  DEFAULT_INTERPRETER_PTC,
+  FORBIDDEN_INTERPRETER_PTC,
   RUBRIC_GRADER_SYSTEM_PROMPT,
   DEFAULT_RECURSION_LIMIT,
 } from "./agent.ts";
@@ -91,11 +101,19 @@ export {
   logout,
   status,
   getValidAccessToken,
+  discoverClaudeCodeCredentials,
+  claudeCodeCredentialsPath,
   OAUTH_CLIENT_ID,
   OAUTH_SCOPES,
   OAUTH_BETA_HEADER,
 } from "./auth.ts";
-export type { StoredCredentials, AuthStatus } from "./auth.ts";
+export type {
+  StoredCredentials,
+  AuthStatus,
+  CredentialSource,
+  DiscoveredCredentials,
+  DiscoverDeps,
+} from "./auth.ts";
 
 export {
   buildAnthropicChatModel,
