@@ -111,8 +111,9 @@ export function sanitizePtc(ptc: readonly string[]): string[] {
   const forbidden = new Set<string>(FORBIDDEN_INTERPRETER_PTC);
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const name of ptc) {
-    if (forbidden.has(name) || seen.has(name)) continue;
+  for (const raw of ptc) {
+    const name = raw.trim();
+    if (!name || forbidden.has(name) || seen.has(name)) continue;
     seen.add(name);
     out.push(name);
   }

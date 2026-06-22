@@ -209,7 +209,7 @@ export interface RetryMiddlewareDescriptor {
  * model context.
  *
  * The interpreter calls agent tools through a narrow read-only `ptc` allowlist.
- * Mutating tools (`write_file`, `edit_file`, `execute`) are never exposed to the
+ * Mutating tools (`write_file`, `edit_file`, `execute`, `delete_file`) are never exposed to the
  * sandbox — {@link OhMyDcodeOptions.interpreterPtc} overrides are sanitized
  * against a forbidden set at resolve time. The numeric fields cap the sandbox's
  * resource use; when omitted, the middleware's own conservative defaults apply

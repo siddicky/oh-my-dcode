@@ -52,7 +52,7 @@ check("eight workflows present", SKILLS.length === 8);
 check("scaffold covers roster + skills + AGENTS.md", scaffold.length === ROSTER.length + SKILLS.length + 1);
 check("budget routing differs from balanced for opus tier", resolveModelMap({ routing: "budget" }).opus !== models.opus);
 check("default harness installs model-retry + interpreter + rubric (tool retries opt-in)", config.middleware.length === 3 && config.middleware[0]?.kind === "model-retry" && config.middleware[1]?.kind === "interpreter" && config.middleware[2]?.kind === "rubric");
-check("interpreter PTC allowlist is read-only", (() => { const i = config.middleware.find((m) => m.kind === "interpreter"); return i?.kind === "interpreter" && !["write_file", "edit_file", "execute", "delete_file"].some((t) => i.ptc.includes(t)); })());
+check("interpreter PTC allowlist is read-only", (() => { const i = config.middleware.find((m) => m.kind === "interpreter"); if (i?.kind !== "interpreter") return false; return !["write_file", "edit_file", "execute", "delete_file"].some((t) => i.ptc.includes(t)); })());
 check("default recursion limit is set", config.recursionLimit > 25);
 
 console.log(`\n${failures === 0 ? "ALL GOOD" : failures + " CHECK(S) FAILED"}`);
