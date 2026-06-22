@@ -39,16 +39,21 @@ export function stripProvider(spec: string): string {
  * inference.
  *
  * @param modelId Bare model id (no `anthropic:` prefix), e.g. `claude-opus-4-8`.
+ * @param accessToken OAuth bearer token used for Anthropic requests.
+ * @param loadModule Seam for injecting a fake `@langchain/anthropic` in tests;
+ *   defaults to the real runtime-only loader.
  */
 export async function buildAnthropicChatModel(
   modelId: string,
   accessToken: string,
+  loadModule: () => Promise<AnthropicModule> = () =>
+    loadOptionalModule<AnthropicModule>(
+      "@langchain/anthropic",
+      "Claude subscription OAuth requires the '@langchain/anthropic' package. " +
+        "Install it with `npm install @langchain/anthropic`.",
+    ),
 ): Promise<unknown> {
-  const mod = await loadOptionalModule<AnthropicModule>(
-    "@langchain/anthropic",
-    "Claude subscription OAuth requires the '@langchain/anthropic' package. " +
-      "Install it with `npm install @langchain/anthropic`.",
-  );
+  const mod = await loadModule();
   return new mod.ChatAnthropic({
     model: modelId,
     clientOptions: {

@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cat package.json && echo \\\"=== GIT STATUS ===\\\" && git status && echo \\\"=== LOCK EXISTS? ===\\\" && ls -la package-lock.json 2>&1\",\"description\":\"Inspect package.json and git status\"}",
+  "error": "Exit code 1\n{\n  \"name\": \"oh-my-dcode\",\n  \"version\": \"0.2.0\",\n  \"description\": \"oh-my-claudecode's multi-agent orchestration layer, ported to the LangChain Deep Agents (Deep Agents Code) framework for TypeScript.\",\n  \"keywords\": [\n    \"deepagents\",\n    \"deep-agents-code\",\n    \"langchain\",\n    \"agents\",\n    \"orchestration\",\n    \"oh-my-claudecode\",\n    \"ai\",\n    \"coding-agent\"\n  ],\n  \"license\": \"MIT\",\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"git+https://github.com/siddicky/oh-my-dcode.git\"\n...",
+  "timestamp": "2026-06-22T08:54:24.510Z",
+  "retry_count": 1
+}

@@ -1,0 +1,127 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1782118450654,
+  "projectRoot": "/Users/a.siddique/PycharmProjects/oh-my-dcode",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=22.6.0",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "npm",
+    "runtime": "Node.js 22.6.0"
+  },
+  "build": {
+    "buildCommand": "cd /Users/a.siddique/PycharmProjects/oh-my-dcode; npm run build 2>&1 | tail -15; echo \"BUILD_EXIT=${PIPESTATUS[0]}\"; ls dist/index.js 2>&1",
+    "testCommand": "npm test",
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {
+      "build": "tsc -p tsconfig.json",
+      "typecheck": "tsc -p tsconfig.check.json",
+      "test": "node --test --experimental-strip-types test/*.test.ts",
+      "gen:skills": "node --experimental-strip-types scripts/gen-skills.ts",
+      "smoke": "node --experimental-strip-types scripts/smoke.ts",
+      "prepublishOnly": "npm run build && npm test",
+      "omd": "node --experimental-strip-types bin/omd.ts"
+    }
+  },
+  "conventions": {
+    "namingStyle": "camelCase",
+    "importStyle": null,
+    "testPattern": "*.test.ts",
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "bin",
+      "scripts",
+      "src",
+      "test"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "bin": {
+      "path": "bin",
+      "purpose": "Executable scripts",
+      "fileCount": 1,
+      "lastAccessed": 1782118450454,
+      "keyFiles": [
+        "omd.ts"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 2,
+      "lastAccessed": 1782118450491,
+      "keyFiles": [
+        "gen-skills.ts",
+        "smoke.ts"
+      ]
+    },
+    "skills": {
+      "path": "skills",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1782118450495,
+      "keyFiles": []
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 13,
+      "lastAccessed": 1782118450495,
+      "keyFiles": [
+        "agent.ts",
+        "agents.ts",
+        "anthropic-model.ts",
+        "auth.ts",
+        "config.ts"
+      ]
+    },
+    "test": {
+      "path": "test",
+      "purpose": "Test files",
+      "fileCount": 10,
+      "lastAccessed": 1782118450496,
+      "keyFiles": [
+        "adversarial.test.ts",
+        "agent.test.ts",
+        "agents.test.ts",
+        "anthropic-model.test.ts",
+        "auth.test.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "package.json",
+      "accessCount": 3,
+      "lastAccessed": 1782118696818,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
