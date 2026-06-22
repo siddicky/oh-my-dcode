@@ -28,6 +28,33 @@ drop-in for the `dcode` CLI.
 
 ---
 
+## Highlights
+
+- **Dynamic, interpreter-driven workflows** — the fan-out workflows (`ultrawork`,
+  `team`, `ultragoal`) orchestrate through Deep Agents' **code interpreter**
+  (`@langchain/quickjs`): a sandboxed `eval` tool plus a `task()` fan-out global.
+  A workflow keeps its plan/batch/schedule state in JS, fans subagents out and
+  in, validates their typed results, and returns only a compact roll-up — so
+  intermediate logs and failed branches never enter the supervisor's context.
+  On by default; read-only by construction. See [Code interpreter](#code-interpreter).
+- **Claude Code OAuth** — authenticate Anthropic models with a **Claude Code /
+  Claude Pro/Max subscription** instead of an `ANTHROPIC_API_KEY`. Run
+  `omd auth login`, set `auth: "oauth"`, and the whole roster runs on your
+  subscription (with adversarial reviewers auto-routing to Claude when no OpenAI
+  key is present). See [Authentication](#authentication).
+- **SDK-level read-only enforcement** — review, planning, and research agents are
+  sandboxed with a deny-write filesystem rule, so the SDK rejects any write they
+  attempt — author/review separation that prompt discipline can't break. See
+  [Read-only enforcement](#read-only-enforcement).
+- **Tiered model routing** — haiku/sonnet/opus by task weight, with
+  premium/balanced/budget presets and per-tier overrides.
+- **Adversarial cross-model review** — critic and reviewers default to a
+  different model family for decorrelated critique.
+- **Rubric self-evaluation** — an optional grader loop that verifies pass/fail
+  criteria empirically (shell, Playwright, LSP) and iterates until they pass.
+
+---
+
 ## Why this exists
 
 The Deep Agents SDK gives you the *scaffolding* for a deep agent — planning,
@@ -38,7 +65,8 @@ a virtual filesystem, sub-agents, skills, memory. oh-my-dcode supplies the
 | ----------------------------------- | ---------------------------------------------------------------------- |
 | Specialized agents (≈19)            | A roster of Deep Agents sub-agents (`src/agents.ts`)                    |
 | haiku / sonnet / opus model routing | Tiered routing with premium/balanced/budget presets (`src/routing.ts`) |
-| Tier-0 workflows (autopilot, ralph, ultrawork, team, ralplan) | Deep Agents skills (`src/skills.ts` → `skills/*/SKILL.md`)              |
+| Tier-0 workflows (autopilot, ralph, ultrawork, team, ralplan) | Deep Agents skills (`src/skills.ts` → `skills/*/SKILL.md`); the fan-out ones run as **dynamic, interpreter-driven** workflows |
+| Claude subscription auth                                       | **Claude Code OAuth** — run Anthropic models on a Claude Pro/Max login (`src/auth.ts`) |
 | Author/review separation, "never self-approve" | Review/planning/research agents are **read-only**; verify-before-done gate baked into the supervisor prompt |
 | Multi-model cross-check (ccg)       | Adversarial agents (critic, reviewers) default to a **different model family** (`openai:gpt-5.5`) for decorrelated critique |
 | Delegation + verification discipline | Supervisor system prompt (`src/prompts.ts`)                            |
