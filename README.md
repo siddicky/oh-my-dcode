@@ -38,10 +38,11 @@ drop-in for the `dcode` CLI.
   intermediate logs and failed branches never enter the supervisor's context.
   On by default; read-only by construction. See [Code interpreter](#code-interpreter).
 - **Claude Code OAuth** — authenticate Anthropic models with a **Claude Code /
-  Claude Pro/Max subscription** instead of an `ANTHROPIC_API_KEY`. Run
-  `omd auth login`, set `auth: "oauth"`, and the whole roster runs on your
-  subscription (with adversarial reviewers auto-routing to Claude when no OpenAI
-  key is present). See [Authentication](#authentication).
+  Claude Pro/Max subscription** instead of an `ANTHROPIC_API_KEY`. If you're
+  already logged into the Claude Code CLI, `omd` **auto-discovers and reuses**
+  those credentials (env token → keychain/file) — no separate `omd auth login`
+  needed — and the whole roster runs on your subscription (adversarial reviewers
+  auto-route to Claude when no OpenAI key is present). See [Authentication](#authentication).
 - **SDK-level read-only enforcement** — review, planning, and research agents are
   sandboxed with a deny-write filesystem rule, so the SDK rejects any write they
   attempt — author/review separation that prompt discipline can't break. See
@@ -108,27 +109,43 @@ Node's native type stripping — no build step needed to use them).
 Anthropic model calls authenticate one of two ways:
 
 - **API key** (default) — `ANTHROPIC_API_KEY`, as above.
-- **Claude Code subscription (OAuth)** — sign in with a Claude Code / Claude
-  Pro/Max subscription and use that token for all `anthropic:*` agents, no API
-  key required.
+- **Claude Code subscription (OAuth)** — use a Claude Code / Claude Pro/Max
+  subscription token for all `anthropic:*` agents, no API key required.
+
+**Already logged into the Claude Code CLI?** You don't need a separate login —
+`omd` discovers and reuses Claude Code's own credentials automatically. Just opt
+into OAuth and go:
 
 ```bash
 npm install @langchain/anthropic        # optional peer; only OAuth needs it
-omd auth login                          # browser (loopback) sign-in…
-omd auth login --no-browser             # …or paste the code (headless/remote)
-omd auth status                         # show login + token expiry
-omd auth logout                         # remove stored credentials
+unset ANTHROPIC_API_KEY                  # the API rejects an api key + bearer together
+OMD_AUTH=oauth omd run "add a /health endpoint and verify it"
+omd auth status                         # shows which credential source is in use
 ```
 
-`omd auth login` runs the OAuth (PKCE) flow, then stores the tokens in
-`~/.omd/credentials.json` (owner-only, `0600`); the access token is refreshed
-automatically before it expires. To use the login for a run, opt in with
-`auth: "oauth"` in `.omd/config.json`, `OMD_AUTH=oauth`, or `--auth oauth`.
+Discovery precedence (read-only — `omd` **never writes** Claude Code's stores):
+
+1. `CLAUDE_CODE_OAUTH_TOKEN` environment variable.
+2. The Claude Code CLI's primary store — the **macOS keychain**
+   (`Claude Code-credentials`) on macOS, or `~/.claude/.credentials.json`
+   (mode `0600`) on Linux/Windows — with the other as fallback.
+3. `omd`'s own store at `~/.omd/credentials.json`, written by `omd auth login`.
+
+When a discovered token is near expiry, `omd` refreshes it (via Claude Code's
+refresh token) and persists the result to **its own** `~/.omd/credentials.json`,
+leaving Claude Code's keychain/file untouched. Set `OMD_DISCOVER=off` to disable
+reuse and require an explicit `omd auth login`.
+
+**Need a separate/isolated token?** Run the OAuth (PKCE) flow yourself:
 
 ```bash
-unset ANTHROPIC_API_KEY                  # the API rejects both keys at once
-OMD_AUTH=oauth omd run "add a /health endpoint and verify it"
+omd auth login                          # browser (loopback) sign-in…
+omd auth login --no-browser             # …or paste the code (headless/remote)
+omd auth logout                         # remove omd's stored credentials
 ```
+
+To use OAuth for a run, opt in with `auth: "oauth"` in `.omd/config.json`,
+`OMD_AUTH=oauth`, or `--auth oauth`.
 
 Notes:
 - **Unset `ANTHROPIC_API_KEY`** when using OAuth — sending both an api key and a
@@ -140,6 +157,8 @@ Notes:
   `OPENAI_API_KEY` (or `--adversarial-model`) to keep cross-model review.
 - This uses the same OAuth client and Claude Code system-prompt identity that
   the inference endpoint requires — an interop requirement, not configurable.
+- The OAuth endpoints are overridable for forward-compat via `OMD_OAUTH_CLIENT_ID`,
+  `OMD_OAUTH_TOKEN_URL`, and `OMD_OAUTH_AUTHORIZE_URL`.
 
 ---
 

@@ -782,8 +782,11 @@ async function buildOAuthContext(
   const token = await getValidAccessToken();
   if (!token) {
     throw new Error(
-      'auth: "oauth" is set but no Claude Code login was found. ' +
-        "Run `omd auth login` first (or unset auth to use ANTHROPIC_API_KEY).",
+      'auth: "oauth" is set but no credentials were found — neither an ' +
+        "`omd auth login` nor the official Claude Code CLI's credentials " +
+        "(checked CLAUDE_CODE_OAUTH_TOKEN, ~/.claude/.credentials.json, and the " +
+        "macOS keychain). Log into Claude Code or run `omd auth login` (or unset " +
+        "auth to use ANTHROPIC_API_KEY). Set OMD_DISCOVER=off to disable reuse.",
     );
   }
   const cache = new Map<string, unknown>();

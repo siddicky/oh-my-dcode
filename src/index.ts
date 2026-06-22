@@ -101,11 +101,19 @@ export {
   logout,
   status,
   getValidAccessToken,
+  discoverClaudeCodeCredentials,
+  claudeCodeCredentialsPath,
   OAUTH_CLIENT_ID,
   OAUTH_SCOPES,
   OAUTH_BETA_HEADER,
 } from "./auth.ts";
-export type { StoredCredentials, AuthStatus } from "./auth.ts";
+export type {
+  StoredCredentials,
+  AuthStatus,
+  CredentialSource,
+  DiscoveredCredentials,
+  DiscoverDeps,
+} from "./auth.ts";
 
 export {
   buildAnthropicChatModel,

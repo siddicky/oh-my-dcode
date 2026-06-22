@@ -71,12 +71,19 @@ Environment:
   OMD_INTERPRETER_TIMEOUT_MS, OMD_INTERPRETER_MAX_PTC_CALLS (interpreter caps)
   OMD_ENFORCE_READ_ONLY                                     (read-only sandboxing)
   OMD_AUTH=oauth                                            (use a Claude login)
+  OMD_DISCOVER=off                          (don't reuse the Claude Code CLI login)
+  OMD_OAUTH_CLIENT_ID, OMD_OAUTH_TOKEN_URL, OMD_OAUTH_AUTHORIZE_URL (endpoint overrides)
+  CLAUDE_CODE_OAUTH_TOKEN                    (a Claude Code access token, auto-detected)
   ANTHROPIC_API_KEY / OPENAI_API_KEY (or your provider's key)   (required for 'run')
 
 Authentication:
   By default Anthropic models use ANTHROPIC_API_KEY. To use a Claude Code /
-  Claude Pro/Max subscription instead, run \`omd auth login\`, then set
-  auth: "oauth" in .omd/config.json (or OMD_AUTH=oauth, or --auth oauth). Unset
+  Claude Pro/Max subscription instead, set auth: "oauth" in .omd/config.json (or
+  OMD_AUTH=oauth, or --auth oauth). If you're already logged into the Claude Code
+  CLI, omd reuses those credentials automatically (CLAUDE_CODE_OAUTH_TOKEN, then
+  ~/.claude/.credentials.json, then the macOS keychain) — no separate login
+  needed; run \`omd auth login\` only for an isolated token. omd never writes the
+  Claude Code stores; set OMD_DISCOVER=off to disable reuse. Unset
   ANTHROPIC_API_KEY when using OAuth. With no OPENAI_API_KEY, the adversarial
   reviewers auto-route to Claude. OAuth requires \`npm install @langchain/anthropic\`.
 `;
@@ -248,6 +255,21 @@ function cmdInit(options: OhMyDcodeOptions, cwd: string, force: boolean): void {
   console.log("Run the Deep Agents Code CLI (dcode) in this directory to use them.");
 }
 
+/** Human-readable label for where the active credentials were found. */
+function describeSource(source: string | undefined): string {
+  switch (source) {
+    case "claude-code-env":
+      return "via CLAUDE_CODE_OAUTH_TOKEN";
+    case "claude-code-file":
+      return "via the Claude Code CLI's ~/.claude/.credentials.json";
+    case "claude-code-keychain":
+      return "via the Claude Code CLI's macOS keychain";
+    case "omd":
+    default:
+      return "via omd login";
+  }
+}
+
 async function cmdAuth(rest: string[], noBrowser: boolean): Promise<void> {
   const sub = rest[0];
   // Built-in-only module: keeps `auth` zero-dependency like inspect/scaffold.
@@ -261,23 +283,39 @@ async function cmdAuth(rest: string[], noBrowser: boolean): Promise<void> {
       console.log(
         'Set auth: "oauth" in .omd/config.json (or OMD_AUTH=oauth) to use it.',
       );
+      console.log(
+        "Tip: if you're already logged into the Claude Code CLI, this is " +
+          "optional — omd reuses those credentials automatically.",
+      );
       return;
     }
     case "logout": {
       await auth.logout();
-      console.log("Logged out (credentials removed).");
+      console.log("Logged out (omd credentials removed).");
+      console.log(
+        "Note: this does not touch the Claude Code CLI's own login; set " +
+          "OMD_DISCOVER=off if you don't want omd to reuse it.",
+      );
       return;
     }
     case "status": {
       const s = await auth.status();
       if (!s.loggedIn) {
-        console.log("Not logged in. Run `omd auth login` to sign in.");
+        console.log(
+          "Not logged in. Run `omd auth login`, or log into the Claude Code " +
+            "CLI (omd reuses its credentials automatically).",
+        );
         return;
       }
-      const when = s.expiresAt ? new Date(s.expiresAt).toISOString() : "unknown";
-      console.log(`Logged in.`);
-      console.log(`  Token ${s.expired ? "EXPIRED" : "valid"} (expires ${when})`);
+      console.log(`Logged in (${describeSource(s.source)}).`);
+      if (s.expiresAt) {
+        const when = new Date(s.expiresAt).toISOString();
+        console.log(`  Token ${s.expired ? "EXPIRED" : "valid"} (expires ${when})`);
+      }
       if (s.scope) console.log(`  Scope: ${s.scope}`);
+      if (s.source && s.source !== "omd") {
+        console.log("  Reusing the Claude Code CLI login — `omd auth login` not required.");
+      }
       return;
     }
     default:
