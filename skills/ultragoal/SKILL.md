@@ -19,8 +19,11 @@ by the native rubric self-evaluation loop, not a manual review hand-off.
    (build, lint, and tests pass with shown output), what a `code-reviewer` would
    raise (no blockers or majors, scope honored), and any observable behavior
    (the page renders / endpoint responds, no new type or diagnostic errors).
-3. EXECUTE — drive one goal at a time. Assign each to the right execution agent
-   (`executor`, `debugger`, `test-engineer`, or `designer`) by tier and lane.
+3. EXECUTE — assign each goal to the right execution agent (`executor`,
+   `debugger`, `test-engineer`, or `designer`) by tier and lane. When goals are
+   independent, fan them out from the code interpreter in a single `eval` with
+   the `task()` global (batches of about 8), carrying only each goal's id and
+   status back; drive dependent goals one at a time.
 4. SELF-EVALUATE & ITERATE — close the goal by supplying its rubric as the run's
    `rubric`. The rubric grader scores every criterion — running the build/tests
    with its shell tool, driving the UI with Playwright, and querying diagnostics

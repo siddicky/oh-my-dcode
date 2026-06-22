@@ -96,6 +96,36 @@ test("ultragoal closes goals via rubric self-evaluation", () => {
   assert.match(ultragoal.description, /rubric/i);
 });
 
+test("fan-out workflows drive the code interpreter", () => {
+  // ultrawork and team keep their batch/schedule state in JS via the eval tool
+  // and the task() fan-out global, returning only compact results.
+  for (const name of ["ultrawork", "team"]) {
+    const skill = getSkill(name);
+    assert.ok(skill, `missing workflow: ${name}`);
+    assert.match(skill.body, /\beval\b/, `${name} should use the eval tool`);
+    assert.match(skill.body, /task\(/, `${name} should fan out via task()`);
+    assert.match(skill.body, /responseSchema/, `${name} should validate results`);
+    assert.match(skill.body, /```js/, `${name} should carry an example eval block`);
+  }
+});
+
+test("ultrawork inlines fan-out helpers and uses read-only PTC tools", () => {
+  const ultrawork = getSkill("ultrawork");
+  assert.ok(ultrawork);
+  // Helpers are inlined (the interpreter has no imports).
+  assert.match(ultrawork.body, /const chunk =/);
+  // Reads go through PTC; writes go through executor.
+  assert.match(ultrawork.body, /tools\.(glob|grep|readFile|ls)/);
+  assert.match(ultrawork.body, /subagentType: 'executor'/);
+});
+
+test("ultragoal fans independent goals out through the interpreter", () => {
+  const ultragoal = getSkill("ultragoal");
+  assert.ok(ultragoal);
+  assert.match(ultragoal.body, /interpreter/i);
+  assert.match(ultragoal.body, /task\(\)/);
+});
+
 test("deepship chains the four pipeline phases by name", () => {
   const deepship = getSkill("deepship");
   assert.ok(deepship);

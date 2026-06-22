@@ -52,6 +52,9 @@ a virtual filesystem, sub-agents, skills, memory. oh-my-dcode supplies the
 npm install oh-my-dcode        # library + the `omd` CLI
 # the runtime SDK (peer): if not already present
 npm install deepagents
+# the code interpreter (on by default) — installed automatically as a dependency,
+# but listed here for clarity; loaded lazily so the core stays SDK-free
+npm install @langchain/quickjs
 ```
 
 Set a provider key for the model you route to (Anthropic by default):
@@ -199,6 +202,8 @@ Flags: --routing <premium|balanced|budget>  --backend <composite|state|filesyste
        --rubric "<criteria>"  Self-evaluate against these pass/fail criteria, iterating to pass-or-cap
        --rubric-iterations <n>   Cap on rubric self-evaluation cycles (default 3; 0 disables)
        --no-grader-tools         Grade from the transcript only (no shell/Playwright/LSP tools)
+       --no-interpreter          Disable the code interpreter (eval tool + task() fan-out); on by default
+       --no-enforce-read-only    Don't sandbox read-only agents at the SDK level; on by default
        --yolo   Unattended: grant all permissions (no approval gating) + ~unbounded recursion
 ```
 
@@ -212,7 +217,10 @@ approval gating and lifts the recursion limit to effectively unbounded. A given
 
 18 specialized agents across five lanes. Review, planning, and research agents
 are **read-only** so the agent that writes code is never the one that approves
-it — OMC's author/review separation.
+it — OMC's author/review separation. Read-only is enforced at the **SDK level**,
+not just in prompts: each read-only agent carries a deny-write filesystem
+permission rule, so the SDK rejects any `write_file`/`edit_file` it attempts (see
+[Read-only enforcement](#read-only-enforcement)).
 
 | Lane          | Agents                                                        | Default tier |
 | ------------- | ------------------------------------------------------------- | ------------ |
@@ -234,14 +242,17 @@ built-in).
 Shipped as Deep Agents skills the supervisor can invoke. Each describes how to
 drive the roster for that mode — the five OMC Tier-0 workflows plus the
 gajae-code pipeline (`deep-interview` → `ralplan` → `ultragoal` → `team`,
-composed end-to-end by `deepship`):
+composed end-to-end by `deepship`). The fan-out workflows (`ultrawork`, `team`,
+and `ultragoal`'s independent goals) drive their batching from the
+[code interpreter](#code-interpreter) — keeping plan, schedule, and integration
+state in JS and returning only compact results to the supervisor:
 
 | Workflow    | What it does                                                                      |
 | ----------- | -------------------------------------------------------------------------------- |
 | `autopilot` | Idea → verified code: expand → design/plan → build → QA → review.                |
 | `ralph`     | Persistent verify/fix loop until an independent reviewer confirms the goal.      |
-| `ultrawork` | Maximum parallelism: decompose into conflict-free lanes and fan out.             |
-| `team`      | Staged pipeline (plan → spec → execute → verify → fix) on a shared task list.    |
+| `ultrawork` | Maximum parallelism: decompose into conflict-free lanes and fan out via the interpreter. |
+| `team`      | Staged pipeline (plan → spec → execute → verify → fix), scheduled wave-by-wave via the interpreter. |
 | `ralplan`   | Consensus planning gate: plan, adversarially critique, converge — then hand off. |
 | `deep-interview` | Socratic requirements gate: interview in rounds, lateral-review panel, crystallize a spec. |
 | `ultragoal` | Durable multi-goal execution: decompose into ordered goals, each closed when it satisfies its rubric via the self-evaluation grader loop. |
@@ -390,6 +401,55 @@ diagnostics over an **LSP** server — rather than trusting the transcript. The
 grader tools are loaded via [`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters);
 set `graderTools: false` for pure-LLM grading with no shell or MCP servers.
 
+### Code interpreter
+
+The harness installs [`@langchain/quickjs`](https://www.npmjs.com/package/@langchain/quickjs)'s
+**code interpreter** by default: a sandboxed JavaScript `eval` tool backed by a
+QuickJS WASM runtime, plus a programmatic `task()` global for fan-out subagent
+dispatch. This is what the fan-out workflows reach for — a workflow keeps its
+plan/loop/batch state in JS, fans subagents out and in, validates their typed
+results, and returns only a compact roll-up, so intermediate logs and failed
+branches never enter the supervisor's context.
+
+It is **read-only by construction**. The sandbox can only call agent tools
+through a narrow programmatic-tool-calling (PTC) allowlist that defaults to the
+read-only filesystem tools (`ls`, `read_file`, `glob`, `grep`). Mutating tools
+(`write_file`, `edit_file`, `execute`, `delete_file`) are **never** exposed — any
+allowlist you supply is sanitized against that forbidden set — so code in the
+sandbox can inspect the workspace but every write must go back through the
+supervisor or a delegated execution agent.
+
+```ts
+createOhMyDcode({
+  interpreter: true,            // master switch (default true; false omits the eval tool)
+  interpreterPtc: ["read_file", "glob", "grep"], // read-only allowlist (sanitized)
+  interpreterTimeoutMs: 5000,   // per-eval wall-clock cap (middleware default 5s)
+  interpreterMaxPtcCalls: 256,  // tools.* calls per eval (default 256; null lifts it — unsafe)
+  interpreterMemoryLimitBytes: 67108864, // sandbox heap cap (middleware default 64MB)
+});
+```
+
+`@langchain/quickjs` is a hard dependency but loaded lazily at the runtime
+boundary, so the SDK-free orchestration core stays importable without the WASM
+runtime present.
+
+### Read-only enforcement
+
+The read-only roster agents (research, planning, review) are sandboxed at the
+**SDK level** by default: each is given a deny-write filesystem permission rule
+(`{ operations: ["write"], paths: ["/**"], mode: "deny" }`), so the SDK rejects
+any `write_file`/`edit_file` the agent attempts — prompt discipline alone no
+longer has to hold the line. Authoring agents keep the permissive default.
+
+```ts
+createOhMyDcode({ enforceReadOnly: true }); // default; false → prompt-only read-only
+```
+
+Filesystem permissions don't cover the `execute` (shell) tool, but on the shipped
+backends (`state` / `filesystem` / `composite`) `execute` has no shell to run, so
+read-only is fully enforced. If you supply your own execution-capable (sandbox)
+backend, restrict `execute` separately.
+
 ---
 
 ## Configuration
@@ -410,6 +470,9 @@ Drop a `.omd/config.json` in your project (env vars override it):
   "rubricGraderTier": "haiku",
   "graderTools": true,
   "graderShellTool": true,
+  "interpreter": true,
+  "interpreterPtc": ["ls", "read_file", "glob", "grep"],
+  "enforceReadOnly": true,
   "skillDirs": ["./my-skills"],
   "memoryPaths": ["./AGENTS.md"]
 }
@@ -418,7 +481,9 @@ Drop a `.omd/config.json` in your project (env vars override it):
 Env overrides: `OMD_AUTH` (`oauth`/`api-key`), `OMD_RECURSION_LIMIT`,
 `OMD_MODEL_RETRIES`, `OMD_TOOL_RETRIES` (`0`/`none` disables a retry layer),
 `OMD_RUBRIC_MAX_ITERATIONS`, `OMD_RUBRIC_GRADER_TIER`, `OMD_GRADER_TOOLS`,
-`OMD_GRADER_SHELL_TOOL`.
+`OMD_GRADER_SHELL_TOOL`, `OMD_INTERPRETER`, `OMD_INTERPRETER_PTC` (comma-separated),
+`OMD_INTERPRETER_TIMEOUT_MS`, `OMD_INTERPRETER_MAX_PTC_CALLS`,
+`OMD_ENFORCE_READ_ONLY`.
 
 ---
 
