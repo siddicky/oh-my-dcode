@@ -60,8 +60,55 @@ Set a provider key for the model you route to (Anthropic by default):
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+…or sign in with a **Claude Code / Claude Pro/Max subscription** instead of an
+API key (see [Authentication](#authentication)):
+
+```bash
+npm install @langchain/anthropic   # required for OAuth
+omd auth login                     # sign in via your browser
+export OMD_AUTH=oauth              # use the subscription token for runs
+```
+
 Requires **Node ≥ 22.6** (the `omd` CLI and tests run TypeScript directly via
 Node's native type stripping — no build step needed to use them).
+
+## Authentication
+
+Anthropic model calls authenticate one of two ways:
+
+- **API key** (default) — `ANTHROPIC_API_KEY`, as above.
+- **Claude Code subscription (OAuth)** — sign in with a Claude Code / Claude
+  Pro/Max subscription and use that token for all `anthropic:*` agents, no API
+  key required.
+
+```bash
+npm install @langchain/anthropic        # optional peer; only OAuth needs it
+omd auth login                          # browser (loopback) sign-in…
+omd auth login --no-browser             # …or paste the code (headless/remote)
+omd auth status                         # show login + token expiry
+omd auth logout                         # remove stored credentials
+```
+
+`omd auth login` runs the OAuth (PKCE) flow, then stores the tokens in
+`~/.omd/credentials.json` (owner-only, `0600`); the access token is refreshed
+automatically before it expires. To use the login for a run, opt in with
+`auth: "oauth"` in `.omd/config.json`, `OMD_AUTH=oauth`, or `--auth oauth`.
+
+```bash
+unset ANTHROPIC_API_KEY                  # the API rejects both keys at once
+OMD_AUTH=oauth omd run "add a /health endpoint and verify it"
+```
+
+Notes:
+- **Unset `ANTHROPIC_API_KEY`** when using OAuth — sending both an api key and a
+  bearer token is rejected by the API.
+- Only `anthropic:*` models use the subscription token. Other providers (e.g.
+  the default `openai:gpt-5.5` adversarial reviewers) keep using their own
+  env-var keys. With **no `OPENAI_API_KEY` set**, the adversarial reviewers
+  auto-route to Claude, so a Claude subscription alone is enough; set
+  `OPENAI_API_KEY` (or `--adversarial-model`) to keep cross-model review.
+- This uses the same OAuth client and Claude Code system-prompt identity that
+  the inference endpoint requires — an interop requirement, not configurable.
 
 ---
 
@@ -138,6 +185,7 @@ dcode                    # now has the OMC sub-agents + workflows available
 ```
 omd [run] "<task>"     Orchestrate a task to completion (needs deepagents + API key)
 omd -n "<task>"        Single-shot, non-interactive
+omd auth <login|logout|status>   Sign in with a Claude Code subscription (OAuth)
 omd init [--force]     Write the OMC roster + workflows into ./.deepagents
 omd agents             List the specialized roster and their resolved models
 omd skills             List the orchestration workflows
@@ -145,6 +193,8 @@ omd config             Show the resolved model routing and backend
 omd help               Usage
 
 Flags: --routing <premium|balanced|budget>  --backend <composite|state|filesystem>  --workdir <dir>
+       --auth <oauth|api-key>    Anthropic auth: Claude subscription (oauth) or ANTHROPIC_API_KEY
+       --no-browser              For auth login: paste the code instead of using a loopback server
        --recursion-limit <n>  --model-retries <n>  --tool-retries <n>
        --rubric "<criteria>"  Self-evaluate against these pass/fail criteria, iterating to pass-or-cap
        --rubric-iterations <n>   Cap on rubric self-evaluation cycles (default 3; 0 disables)
@@ -348,6 +398,7 @@ Drop a `.omd/config.json` in your project (env vars override it):
 
 ```json
 {
+  "auth": "api-key",
   "routing": "balanced",
   "backend": "composite",
   "models": { "opus": "anthropic:claude-opus-4-8" },
@@ -364,9 +415,10 @@ Drop a `.omd/config.json` in your project (env vars override it):
 }
 ```
 
-Env overrides: `OMD_RECURSION_LIMIT`, `OMD_MODEL_RETRIES`, `OMD_TOOL_RETRIES`
-(`0`/`none` disables a retry layer), `OMD_RUBRIC_MAX_ITERATIONS`,
-`OMD_RUBRIC_GRADER_TIER`, `OMD_GRADER_TOOLS`, `OMD_GRADER_SHELL_TOOL`.
+Env overrides: `OMD_AUTH` (`oauth`/`api-key`), `OMD_RECURSION_LIMIT`,
+`OMD_MODEL_RETRIES`, `OMD_TOOL_RETRIES` (`0`/`none` disables a retry layer),
+`OMD_RUBRIC_MAX_ITERATIONS`, `OMD_RUBRIC_GRADER_TIER`, `OMD_GRADER_TOOLS`,
+`OMD_GRADER_SHELL_TOOL`.
 
 ---
 

@@ -38,6 +38,11 @@ function isBackendKind(value: unknown): value is BackendKind {
   );
 }
 
+/** Validate an auth mode (`oauth`/`api-key`); undefined when unrecognized. */
+function parseAuthMode(value: unknown): OhMyDcodeOptions["auth"] | undefined {
+  return value === "oauth" || value === "api-key" ? value : undefined;
+}
+
 /**
  * Normalize an arbitrary parsed JSON value into a safe partial set of options.
  * Unknown keys are ignored; malformed values are dropped rather than trusted.
@@ -46,6 +51,9 @@ export function parseFileConfig(raw: unknown): Partial<OhMyDcodeOptions> {
   if (raw === null || typeof raw !== "object") return {};
   const obj = raw as Record<string, unknown>;
   const out: Partial<OhMyDcodeOptions> = {};
+
+  const auth = parseAuthMode(obj.auth);
+  if (auth !== undefined) out.auth = auth;
 
   if (isRoutingPreset(obj.routing)) {
     out.routing = obj.routing as RoutingPreset;
@@ -110,6 +118,9 @@ export function parseEnvConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Partial<OhMyDcodeOptions> {
   const out: Partial<OhMyDcodeOptions> = {};
+
+  const auth = parseAuthMode(env.OMD_AUTH);
+  if (auth !== undefined) out.auth = auth;
 
   if (isRoutingPreset(env.OMD_ROUTING)) {
     out.routing = env.OMD_ROUTING as RoutingPreset;
