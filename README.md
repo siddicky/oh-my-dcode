@@ -560,3 +560,6 @@ MIT. oh-my-dcode is an independent reimplementation inspired by
 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (MIT, by
 Yeachan Heo) and built on [Deep Agents](https://docs.langchain.com/oss/javascript/deepagents/overview).
 Not affiliated with or endorsed by either project.
+
+
+Rework verification: rework-verify-79be07fe19920821898a
